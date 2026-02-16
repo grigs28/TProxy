@@ -10,7 +10,7 @@ from typing import Dict, Optional
 class Monitor:
     """系统监控数据采集器"""
 
-    def __init__(self, cache_path: str = '/mnt/HDD/cache/Tengine',
+    def __init__(self, cache_path: str = '/mnt/HDD/TProxy/cache',
                  status_url: str = 'http://127.0.0.1:8080/status'):
         self.cache_path = cache_path
         self.status_url = status_url

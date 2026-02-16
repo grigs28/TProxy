@@ -72,7 +72,7 @@ systemctl enable --now proxy-manager
 | PROXY_HOST_PORT | 代理端口 | 3128 |
 | DNSMASQ_HOST_PORT | DNS 端口 | 53 |
 | STATUS_HOST_PORT | 状态页端口 | 8080 |
-| CACHE_BASE | 缓存目录 | /mnt/HDD/cache/Tengine |
+| CACHE_BASE | 缓存目录 | /mnt/HDD/TProxy/cache |
 
 ## API 接口
 

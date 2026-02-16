@@ -279,13 +279,62 @@ createApp({
                 return;
             }
 
+            // 切换到日志标签页并显示提示
+            this.currentTab = 'logs';
+            this.logs = '⏳ 服务正在重启，请在 5-10 秒后刷新页面查看日志...\n\n' +
+                      '重启日志将在服务恢复后自动加载。';
+
             try {
+                // 发送重启请求（不等待响应，因为服务会重启）
                 const res = await axios.post(`${API_BASE}/api/system/restart`, {}, {
-                    headers: { 'Authorization': AUTH_TOKEN }
+                    headers: { 'Authorization': AUTH_TOKEN },
+                    timeout: 5000  // 5 秒超时
                 });
-                alert('✅ ' + res.data.message + '\n\n服务正在重启，请在几秒后使用新端口访问界面。');
+
+                // 请求成功，延迟后开始获取日志
+                setTimeout(async () => {
+                    try {
+                        // 尝试获取 proxy-manager 日志
+                        await this.fetchLogs('proxy-manager');
+                        // 启动自动刷新（每 5 秒一次，持续 1 分钟）
+                        let retryCount = 0;
+                        this.logRefreshTimer = setInterval(async () => {
+                            await this.fetchLogs('proxy-manager');
+                            retryCount++;
+                            if (retryCount >= 12) { // 12 * 5 = 60 秒
+                                clearInterval(this.logRefreshTimer);
+                                this.logRefreshTimer = null;
+                            }
+                        }, 5000);
+                    } catch (e) {
+                        // 忽略错误，继续尝试
+                        this.logs += '\n\n等待服务恢复...';
+                    }
+                }, 8000);
+
             } catch (e) {
-                this.notify('error', '重启失败: ' + (e.response?.data?.error || e.message));
+                // 即使请求失败（服务已重启），也继续等待日志
+                if (e.code === 'ECONNABORTED' || e.message.includes('Network Error')) {
+                    // 请求超时或网络错误是正常的，说明服务正在重启
+                    setTimeout(async () => {
+                        try {
+                            await this.fetchLogs('proxy-manager');
+                            let retryCount = 0;
+                            this.logRefreshTimer = setInterval(async () => {
+                                await this.fetchLogs('proxy-manager');
+                                retryCount++;
+                                if (retryCount >= 12) {
+                                    clearInterval(this.logRefreshTimer);
+                                    this.logRefreshTimer = null;
+                                }
+                            }, 5000);
+                        } catch (e2) {
+                            this.logs += '\n\n等待服务恢复...';
+                        }
+                    }, 8000);
+                } else {
+                    this.logs = '重启失败: ' + (e.response?.data?.error || e.message);
+                }
             }
         },
 
@@ -476,6 +525,64 @@ createApp({
                 restarting: '重启中'
             };
             return texts[status] || status;
+        },
+
+        // 系统测试
+        async runSystemTest() {
+            try {
+                const res = await axios.post(`${API_BASE}/api/test`, {}, {
+                    headers: { 'Authorization': AUTH_TOKEN }
+                });
+
+                if (res.data.success) {
+                    const results = res.data.results;
+                    let report = '🧪 系统测试报告\n';
+                    report += '='.repeat(50) + '\n\n';
+
+                    // 端口监听测试
+                    report += '📡 端口监听测试:\n';
+                    report += `  DNS 端口 (53):      ${results.ports.dns ? '✅ 正常' : '❌ 未监听'}\n`;
+                    report += `  代理端口 (3128):    ${results.ports.proxy ? '✅ 正常' : '❌ 未监听'}\n`;
+                    report += `  状态页端口 (8080):  ${results.ports.status ? '✅ 正常' : '❌ 未监听'}\n\n`;
+
+                    // DNS 解析测试
+                    report += '🔍 DNS 解析测试:\n';
+                    if (results.dns.baidu) {
+                        report += `  www.baidu.com: ✅ 解析成功\n`;
+                        if (results.dns.output) {
+                            report += `  解析结果: ${results.dns.output}\n`;
+                        }
+                    } else {
+                        report += `  www.baidu.com: ❌ 解析失败\n`;
+                        if (results.dns.output) {
+                            report += `  错误信息: ${results.dns.output}\n`;
+                        }
+                    }
+                    report += '\n';
+
+                    // 代理功能测试
+                    report += '🔄 代理功能测试:\n';
+                    if (results.proxy.success) {
+                        report += `  HTTP 代理: ✅ 正常工作\n`;
+                        // 显示前几行输出
+                        if (results.proxy.output) {
+                            const lines = results.proxy.output.split('\n').slice(0, 3).join('\n');
+                            report += `  响应头:\n${lines}\n`;
+                        }
+                    } else {
+                        report += `  HTTP 代理: ❌ 测试失败\n`;
+                        if (results.proxy.output) {
+                            report += `  错误信息: ${results.proxy.output}\n`;
+                        }
+                    }
+
+                    alert(report);
+                } else {
+                    this.notify('error', '测试失败: ' + (res.data.error || '未知错误'));
+                }
+            } catch (e) {
+                this.notify('error', '测试请求失败: ' + (e.response?.data?.error || e.message));
+            }
         }
     }
 }).mount('#app');

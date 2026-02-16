@@ -25,6 +25,7 @@ TProxy 是一个功能完整的代理缓存服务器解决方案，专为国内�
 - **缓存清理**: 按类型清理缓存（全部/Docker/YUM/GitHub）
 - **热重载**: Nginx 配置测试后重载，安全可靠
 - **系统服务**: 支持开机自启，可配置系统服务
+- **系统测试**: 一键测试端口监听、DNS 解析、代理功能
 
 ## 项目结构
 
@@ -48,17 +49,27 @@ TProxy 是一个功能完整的代理缓存服务器解决方案，专为国内�
 │   │   ├── js/              # JavaScript 代码
 │   │   └── assets/          # 静态资源
 │   ├── systemd/             # systemd 服务文件
+│   ├── config/              # 配置模块
 │   ├── install.sh           # 安装脚本
 │   └── requirements.txt     # Python 依赖
 └── proxy/                   # 代理服务配置
     ├── docker-compose.yml   # Docker Compose 配置
     ├── .env                 # 环境变量配置
-    ├── dnsmasq/             # Dnsmasq 配置
-    │   └── dnsmasq.conf
-    ├── tengine/             # Tengine 配置
-    │   ├── nginx.conf
+    ├── tengine/             # Tengine 配置目录
     │   └── Dockerfile
     └── scripts/             # 辅助脚本
+
+# 数据目录（自动创建）
+/mnt/HDD/TProxy/
+├── cache/                   # 缓存目录
+│   ├── docker/              # Docker 镜像缓存
+│   ├── yum/                 # YUM 软件包缓存
+│   ├── github/              # GitHub 资源缓存
+│   └── other/               # 其他缓存
+├── dnsmasq/                 # Dnsmasq 配置输出
+│   └── dnsmasq.conf         # 自动生成的配置文件
+└── tengine/                 # Tengine 配置输出
+    └── nginx.conf           # 自动生成的配置文件
 ```
 
 ## 快速开始
@@ -103,13 +114,22 @@ systemctl start proxy-manager
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | NETWORK_MODE | 网络模式 | host |
-| HOST_IP | 本机 IP | 192.168.91.100 |
+| HOST_IP | 本机 IP | 192.168.0.36 |
 | PROXY_HOST_PORT | 代理端口 | 3128 |
 | DNSMASQ_HOST_PORT | DNS 端口 | 53 |
-| STATUS_HOST_PORT | 状态页端口 | 8080 |
-| CACHE_BASE | 缓存目录 | /mnt/HDD/cache/Tengine |
+| STATUS_HOST_PORT | 状态页端口 | 8088 |
+| CACHE_BASE | 缓存目录 | /mnt/HDD/TProxy/cache |
+| PROXY_MANAGER_PORT | 管理界面端口 | 5557 |
+| AUTO_START | 随系统启动 | false |
 
 配置完成后，点击「一键部署」即可启动代理服务。
+
+### 新增功能
+
+- **一键部署**: 自动应用配置、创建目录、构建镜像、启动服务
+- **系统测试**: 测试端口监听、DNS 解析、代理功能
+- **配置验证**: 保存前验证端口冲突、配置格式
+- **自动重启**: 管理程序端口变更时自动重启服务
 
 ## 文档
 

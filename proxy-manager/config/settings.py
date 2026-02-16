@@ -14,7 +14,7 @@ DEFAULT_USERNAME = 'admin'
 DEFAULT_PASSWORD = 'admin'
 
 # 缓存配置
-CACHE_PATH = '/mnt/HDD/cache/Tengine'
+CACHE_PATH = '/mnt/HDD/TProxy/cache'
 
 # 状态页配置
 STATUS_URL = 'http://127.0.0.1:8080/status'

@@ -7,7 +7,7 @@ services:
     cap_add:
       - NET_ADMIN
     volumes:
-      - ./dnsmasq/dnsmasq.conf:/etc/dnsmasq.conf:ro
+      - /mnt/HDD/TProxy/dnsmasq/dnsmasq.conf:/etc/dnsmasq.conf:ro
     logging:
       driver: "json-file"
       options:
@@ -23,8 +23,8 @@ services:
     depends_on:
       - dnsmasq
     volumes:
-      - ./tengine/nginx.conf:/usr/local/tengine/conf/nginx.conf:ro
-      - /mnt/HDD/cache/Tengine:/data/cache
+      - /mnt/HDD/TProxy/tengine/nginx.conf:/usr/local/tengine/conf/nginx.conf:ro
+      - /mnt/HDD/TProxy/cache:/data/cache
     ulimits:
       nofile:
         soft: 65535

@@ -131,20 +131,28 @@ class SystemdController:
             }
 
     def restart_service(self) -> Dict:
-        """重启 Proxy Manager 服务"""
+        """重启 Proxy Manager 服务（异步执行，先返回响应）"""
         try:
-            subprocess.run(
-                ['systemctl', 'restart', self.SERVICE_NAME],
-                check=True, capture_output=True, timeout=30
-            )
+            # 先返回成功响应，然后异步重启
+            import threading
+            import time
+
+            def restart_after_response():
+                time.sleep(1)  # 等待响应发送
+                try:
+                    subprocess.run(
+                        ['systemctl', 'restart', self.SERVICE_NAME],
+                        check=True, capture_output=True, timeout=30
+                    )
+                except Exception:
+                    pass
+
+            thread = threading.Thread(target=restart_after_response, daemon=True)
+            thread.start()
+
             return {
                 'success': True,
-                'message': 'Proxy Manager 服务已重启'
-            }
-        except subprocess.CalledProcessError as e:
-            return {
-                'success': False,
-                'error': f'重启失败: {e.stderr.decode() if e.stderr else str(e)}'
+                'message': 'Proxy Manager 服务正在重启...'
             }
         except Exception as e:
             return {
@@ -208,6 +216,15 @@ class SystemdController:
             enable_result = self.enable_service()
             if not enable_result.get('success'):
                 return enable_result
+
+            # 检查服务是否已在运行
+            status = self.get_service_status()
+            if status.get('active') == 'active':
+                # 服务已运行，不需要启动
+                return {
+                    'success': True,
+                    'message': '服务已设置为开机自启（服务运行中）'
+                }
 
             # 启动服务
             return self.start_service()

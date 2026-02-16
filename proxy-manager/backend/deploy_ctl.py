@@ -13,9 +13,10 @@ from datetime import datetime
 class DeploymentController:
     """Docker Compose 部署控制器"""
 
-    def __init__(self, proxy_dir: str = '/opt/TProxy/proxy'):
+    def __init__(self, proxy_dir: str = '/opt/TProxy/proxy', config_ctl=None):
         self.proxy_dir = proxy_dir
         self.compose_file = os.path.join(proxy_dir, 'docker-compose.yml')
+        self.config_ctl = config_ctl
         self.deploying = False
         self.status = {
             'step': '',
@@ -89,10 +90,51 @@ class DeploymentController:
         self.deploying = True
 
         try:
-            # 步骤 1: 停止现有服务
+            # 步骤 0: 应用配置
             self._log('=== 开始部署 ===')
+            self._notify_status('config', 0, '应用配置...')
+            self._log('步骤 0/11: 应用配置')
+            if self.config_ctl:
+                result = self.config_ctl.generate_configs()
+                if result.get('success'):
+                    self._log('配置已生成: tengine.conf, dnsmasq.conf')
+                else:
+                    self._log(f'警告: 配置生成失败 - {result.get("error", "未知错误")}')
+            else:
+                self._log('警告: 未配置 config_ctl，跳过配置生成')
+
+            # 步骤 1: 创建数据目录
+            self._notify_status('mkdir', 3, '创建数据目录...')
+            self._log('步骤 1/11: 创建数据目录')
+            data_base = '/mnt/HDD/TProxy'
+            cache_base = self.config_ctl.get_env_config().get('CACHE_BASE', '/mnt/HDD/TProxy/cache') if self.config_ctl else '/mnt/HDD/TProxy/cache'
+
+            # 创建所有必要的目录
+            dirs_to_create = [
+                cache_base,  # 缓存目录
+                f'{cache_base}/docker', f'{cache_base}/yum', f'{cache_base}/github', f'{cache_base}/other',
+                f'{data_base}/dnsmasq',  # dnsmasq 配置目录
+                f'{data_base}/tengine',   # tengine 配置目录
+            ]
+
+            for dir_path in dirs_to_create:
+                result = self._run_command(['mkdir', '-p', dir_path], timeout=10)
+                if not result['success']:
+                    self._log(f'警告: 创建目录失败 {dir_path} - {result.get("error", "未知错误")}')
+                else:
+                    self._log(f'目录已创建: {dir_path}')
+
+            # 设置目录权限
+            self._log('设置目录权限...')
+            result = self._run_command(['chown', '-R', '101:101', data_base], timeout=10)
+            if not result['success']:
+                self._log(f'警告: 设置权限失败 - {result.get("error", "未知错误")}')
+            else:
+                self._log(f'权限已设置: {data_base} -> 101:101')
+
+            # 步骤 2: 停止现有服务
             self._notify_status('stop', 5, '停止现有服务...')
-            self._log('步骤 1/6: 停止现有容器')
+            self._log('步骤 2/11: 停止现有容器')
             result = self._run_command(['docker-compose', 'down'], self.proxy_dir)
             if not result['success']:
                 self._log(f'错误: {result["error"]}')
@@ -100,9 +142,9 @@ class DeploymentController:
                 return
             self._log(result.get('output', '容器已停止'))
 
-            # 步骤 2: 构建镜像
+            # 步骤 3: 构建镜像
             self._notify_status('build', 10, '构建 Tengine 镜像（预计 5-10 分钟）...')
-            self._log('步骤 2/6: 构建 Tengine 镜像（这需要一些时间...）')
+            self._log('步骤 3/11: 构建 Tengine 镜像（这需要一些时间...）')
             result = self._run_command(['docker-compose', 'build', 'tengine'], self.proxy_dir, timeout=900)
             if not result['success']:
                 self._log(f'错误: {result["error"]}')
@@ -110,9 +152,9 @@ class DeploymentController:
                 return
             self._log(result.get('output', '镜像构建完成'))
 
-            # 步骤 3: 启动服务
+            # 步骤 4: 启动服务
             self._notify_status('start', 70, '启动服务...')
-            self._log('步骤 3/6: 启动服务')
+            self._log('步骤 4/11: 启动服务')
             result = self._run_command(['docker-compose', 'up', '-d'], self.proxy_dir)
             if not result['success']:
                 self._log(f'错误: {result["error"]}')
@@ -120,27 +162,62 @@ class DeploymentController:
                 return
             self._log(result.get('output', '服务已启动'))
 
-            # 步骤 4: 等待服务就绪
+            # 步骤 5: 等待服务就绪
             self._notify_status('wait', 85, '等待服务就绪...')
-            self._log('步骤 4/6: 等待服务就绪')
+            self._log('步骤 5/11: 等待服务就绪')
             time.sleep(5)
             self._log('服务等待完成')
 
-            # 步骤 5: 验证状态
+            # 步骤 6: 验证状态
             self._notify_status('verify', 90, '验证服务状态...')
-            self._log('步骤 5/6: 验证服务状态')
+            self._log('步骤 6/11: 验证服务状态')
             result = self._run_command(['docker-compose', 'ps'], self.proxy_dir)
             self._log(result.get('output', '服务状态检查完成'))
 
-            # 步骤 6: 测试 DNS
-            self._notify_status('test_dns', 95, '测试 DNS 解析...')
-            self._log('步骤 6/6: 测试 DNS 解析')
+            # 步骤 7: 验证端口监听
+            self._notify_status('ports', 92, '验证端口监听...')
+            self._log('步骤 7/11: 验证端口监听')
+
+            # 获取配置的端口
+            config = self.config_ctl.get_env_config() if self.config_ctl else {}
+            dns_port = config.get('DNSMASQ_HOST_PORT', '53')
+            proxy_port = config.get('PROXY_HOST_PORT', '3128')
+            status_port = config.get('STATUS_HOST_PORT', '8080')
+
+            # 检查端口监听
+            dns_result = self._run_command(['ss', '-tunlp'], timeout=5)
+            dns_listening = f':{dns_port}' in dns_result.get('output', '')
+            proxy_listening = f':{proxy_port}' in dns_result.get('output', '')
+            status_listening = f':{status_port}' in dns_result.get('output', '')
+            self._log(f'  DNS 端口 {dns_port}: {"✓ 监听中" if dns_listening else "✗ 未监听"}')
+            self._log(f'  代理端口 {proxy_port}: {"✓ 监听中" if proxy_listening else "✗ 未监听"}')
+            self._log(f'  状态端口 {status_port}: {"✓ 监听中" if status_listening else "✗ 未监听"}')
+
+            # 步骤 8: 测试 DNS 解析
+            self._notify_status('test_dns', 96, '测试 DNS 解析...')
+            self._log('步骤 8/11: 测试 DNS 解析')
             result = self._run_command(['dig', '@127.0.0.1', 'www.baidu.com'], timeout=10)
-            if result['success']:
-                self._log('DNS 测试成功')
+            if result['success'] and 'status: NOERROR' in result.get('output', ''):
+                self._log('DNS 解析测试成功')
+            else:
+                self._log('警告: DNS 解析测试失败')
+
+            # 步骤 9: 测试代理功能
+            self._notify_status('test_proxy', 99, '测试代理功能...')
+            self._log('步骤 9/11: 测试代理功能')
+            # 测试通过代理访问百度
+            test_result = self._run_command(
+                ['curl', '-x', f'http://127.0.0.1:{proxy_port}', '-I', '-m', '5', 'http://www.baidu.com'],
+                timeout=10
+            )
+            if test_result['success'] and 'HTTP' in test_result.get('output', ''):
+                self._log('代理功能测试成功')
+            else:
+                self._log('警告: 代理功能测试失败 - ' + test_result.get('error', ''))
 
             # 完成
             self._notify_status('complete', 100, '部署完成！')
+            self._log('步骤 11/11: 部署完成')
             self._log('=== 部署完成 ===')
             time.sleep(2)
 
@@ -150,12 +227,21 @@ class DeploymentController:
         finally:
             self.deploying = False
 
-    def _run_command(self, cmd: list, cwd: Optional[str] = None, timeout: int = 600) -> Dict:
+    def _run_command(self, cmd: list, cwd: Optional[str] = None, timeout: int = 600, env: Optional[Dict] = None) -> Dict:
         """运行命令"""
         try:
+            # 设置环境变量，添加 DOCKER_CONFIG 指向可写目录
+            cmd_env = os.environ.copy()
+            cmd_env['DOCKER_CONFIG'] = '/tmp/.docker'
+
+            # 如果有额外环境变量，合并
+            if env:
+                cmd_env.update(env)
+
             result = subprocess.run(
                 cmd,
                 cwd=cwd,
+                env=cmd_env,
                 capture_output=True,
                 text=True,
                 timeout=timeout,

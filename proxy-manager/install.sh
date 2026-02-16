@@ -4,8 +4,9 @@
 
 #set -e
 
-INSTALL_DIR="/opt/proxy-manager"
-PROXY_DIR="/opt/proxy"
+INSTALL_DIR="/opt/TProxy/proxy-manager"
+PROXY_DIR="/opt/TProxy/proxy"
+DATA_DIR="/mnt/HDD/TProxy"
 
 echo "=== Proxy Manager 安装向导 ==="
 
@@ -26,10 +27,9 @@ cd ${INSTALL_DIR}
 # 4. 部署 Proxy 基础环境（之前的 docker-compose 方案）
 echo "部署 Tengine + Dnsmasq 基础环境..."
 
-# 创建基础目录结构
-mkdir -p ${PROXY_DIR}/{dnsmasq/{hosts.d,conf.d,logs},tengine/{conf.d,logs,temp},scripts}
-mkdir -p /mnt/HDD/cache/Tengine/{docker,yum,github,other}
-chown -R 101:101 ${PROXY_DIR}/tengine/logs ${PROXY_DIR}/tengine/temp /mnt/HDD/cache/Tengine
+# 创建数据目录结构
+mkdir -p ${DATA_DIR}/{cache/{docker,yum,github,other},dnsmasq,tengine}
+chown -R 101:101 ${DATA_DIR}
 
 # 写入默认 .env
 cat > ${PROXY_DIR}/.env << 'EOF'
@@ -41,7 +41,7 @@ PROXY_CONTAINER_PORT=3128
 STATUS_HOST_PORT=8080
 STATUS_CONTAINER_PORT=8080
 HOST_IP=192.168.91.100
-CACHE_BASE=/mnt/HDD/cache/Tengine
+CACHE_BASE=/mnt/HDD/TProxy/cache
 EOF
 
 # 5. 安装 Python Web 控制台

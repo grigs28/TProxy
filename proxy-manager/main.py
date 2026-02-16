@@ -31,7 +31,7 @@ docker_ctl = DockerController()
 config_ctl = ConfigController(PROXY_DIR)
 monitor = Monitor(cache_path=os.path.join(PROXY_DIR, '../cache/Tengine'))
 systemd_ctl = SystemdController()
-deploy_ctl = DeploymentController(PROXY_DIR)
+deploy_ctl = DeploymentController(PROXY_DIR, config_ctl)
 
 
 def check_auth():
@@ -216,7 +216,7 @@ def clear_cache():
 
     import subprocess
     cache_type = request.json.get('type', 'all')
-    cache_path = '/mnt/HDD/cache/Tengine'
+    cache_path = '/mnt/HDD/TProxy/cache'
 
     if cache_type == 'all':
         subprocess.run(['rm', '-rf', f'{cache_path}/*/*'])
@@ -464,6 +464,56 @@ def get_deployment_logs():
     if 'error' in result:
         return json_response(result, 400)
     return json_response(result)
+
+
+@app.route('/api/test', methods=['POST'])
+def run_tests():
+    """运行系统测试"""
+    if not check_auth():
+        return json_response({'error': 'Unauthorized'}, 401)
+
+    results = {
+        'ports': {},
+        'dns': {},
+        'proxy': {}
+    }
+
+    # 获取配置
+    config = config_ctl.get_env_config()
+    dns_port = config.get('DNSMASQ_HOST_PORT', '53')
+    proxy_port = config.get('PROXY_HOST_PORT', '3128')
+    status_port = config.get('STATUS_HOST_PORT', '8080')
+
+    try:
+        # 1. 测试端口监听
+        import subprocess
+        ss_result = subprocess.run(['ss', '-tunlp'], capture_output=True, text=True, timeout=5)
+        ss_output = ss_result.stdout
+
+        results['ports']['dns'] = f':{dns_port}' in ss_output
+        results['ports']['proxy'] = f':{proxy_port}' in ss_output
+        results['ports']['status'] = f':{status_port}' in ss_output
+
+        # 2. 测试 DNS 解析
+        dig_result = subprocess.run(['dig', '@127.0.0.1', '+short', 'www.baidu.com'],
+                                      capture_output=True, text=True, timeout=10)
+        results['dns']['baidu'] = dig_result.returncode == 0 and dig_result.stdout.strip() != ''
+        results['dns']['output'] = dig_result.stdout.strip() if dig_result.returncode == 0 else dig_result.stderr
+
+        # 3. 测试代理功能
+        proxy_result = subprocess.run(
+            ['curl', '-x', f'http://127.0.0.1:{proxy_port}', '-I', '-m', '5', 'http://www.baidu.com'],
+            capture_output=True, text=True, timeout=10
+        )
+        results['proxy']['success'] = proxy_result.returncode == 0
+        results['proxy']['output'] = proxy_result.stdout if proxy_result.returncode == 0 else proxy_result.stderr
+
+        return json_response({
+            'success': True,
+            'results': results
+        })
+    except Exception as e:
+        return json_response({'success': False, 'error': str(e)}, 500)
 
 
 # ==================== 错误处理 ====================

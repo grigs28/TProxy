@@ -70,7 +70,7 @@ Authorization: Basic admin:admin
   "PROXY_HOST_PORT": "3128",
   "DNSMASQ_HOST_PORT": "53",
   "STATUS_HOST_PORT": "8080",
-  "CACHE_BASE": "/mnt/HDD/cache/Tengine"
+  "CACHE_BASE": "/mnt/HDD/TProxy/cache"
 }
 ```
 

@@ -77,23 +77,27 @@ class DockerController:
 
     def get_logs(self, service: str, lines: int = 100) -> Dict:
         """获取服务日志"""
-        log_path = {
-            'tengine': '/opt/proxy/tengine/logs/access.log',
-            'dnsmasq': '/opt/proxy/dnsmasq/logs/dnsmasq.log'
-        }
-
-        if service not in log_path:
+        if service not in ['tengine', 'dnsmasq']:
             return {'error': f'Unknown service: {service}'}
 
-        result = subprocess.run(
-            ['tail', '-n', str(lines), log_path[service]],
-            capture_output=True, text=True
-        )
+        try:
+            # 使用 docker logs 获取容器日志
+            result = subprocess.run(
+                ['docker', 'logs', '--tail', str(lines), service],
+                capture_output=True, text=True, timeout=10
+            )
 
-        return {
-            'success': result.returncode == 0,
-            'logs': result.stdout if result.returncode == 0 else result.stderr
-        }
+            if result.returncode != 0:
+                return {'error': f'容器 {service} 不存在或未运行', 'logs': result.stderr}
+
+            return {
+                'success': True,
+                'logs': result.stdout
+            }
+        except subprocess.TimeoutExpired:
+            return {'error': '获取日志超时'}
+        except Exception as e:
+            return {'error': str(e)}
 
     def restart_container(self, name: str) -> Dict:
         """重启容器"""

@@ -58,12 +58,13 @@ class ConfigController:
         }
     }
 
-    def __init__(self, proxy_dir: str = '/opt/proxy'):
+    def __init__(self, proxy_dir: str = '/opt/TProxy/proxy'):
         self.proxy_dir = proxy_dir
         self.env_file = os.path.join(proxy_dir, '.env')
         self.dnsmasq_hosts_file = os.path.join(proxy_dir, 'dnsmasq/hosts.d/custom.conf')
-        self.nginx_conf_file = os.path.join(proxy_dir, 'tengine/nginx.conf')
-        self.dnsmasq_conf_file = os.path.join(proxy_dir, 'dnsmasq/dnsmasq.conf')
+        # 配置文件输出到数据目录
+        self.nginx_conf_file = '/mnt/HDD/TProxy/tengine/nginx.conf'
+        self.dnsmasq_conf_file = '/mnt/HDD/TProxy/dnsmasq/dnsmasq.conf'
 
     def get_env_config(self) -> Dict[str, str]:
         """读取 .env 配置（仅键值对，跳过注释）"""
@@ -210,7 +211,7 @@ class ConfigController:
         dns_port = config.get('DNSMASQ_HOST_PORT', '53')
         host_ip = config.get('HOST_IP', '127.0.0.1')
 
-        cache_base = config.get('CACHE_BASE', '/mnt/HDD/cache/Tengine')
+        cache_base = config.get('CACHE_BASE', '/mnt/HDD/TProxy/cache')
         cache_max_size = config.get('CACHE_MAX_SIZE', '1800g')
         cache_keys_zone = config.get('CACHE_KEYS_ZONE', '512m')
         cache_inactive = config.get('CACHE_INACTIVE', '30d')
@@ -258,14 +259,8 @@ http {{
 
     access_log /usr/local/tengine/logs/access.log cache;
 
-    # HDD 缓存配置
-    proxy_cache_path {cache_base} \\
-                     levels={cache_levels} \\
-                     keys_zone=cache_zone:{cache_keys_zone} \\
-                     max_size={cache_max_size} \\
-                     inactive={cache_inactive} \\
-                     use_temp_path=off \\
-                     min_free={cache_min_free};
+    # HDD 缓存配置（使用容器内路径）
+    proxy_cache_path /data/cache levels={cache_levels} keys_zone=cache_zone:{cache_keys_zone} max_size={cache_max_size} inactive={cache_inactive} use_temp_path=off;
 
     # 代理超时设置
     proxy_connect_timeout  {connect_timeout}s;
@@ -442,7 +437,7 @@ log-queries
                 'icon': '💾',
                 'fields': [
                     {'key': 'CACHE_BASE', 'label': '缓存目录', 'type': 'text',
-                     'default': '/mnt/HDD/cache/Tengine', 'description': '缓存根目录'},
+                     'default': '/mnt/HDD/TProxy/cache', 'description': '缓存根目录'},
                     {'key': 'CACHE_MAX_SIZE', 'label': '最大缓存', 'type': 'text',
                      'default': '1800g', 'description': '例如: 1800g, 500g'},
                     {'key': 'CACHE_KEYS_ZONE', 'label': '缓存内存', 'type': 'text',

@@ -163,6 +163,7 @@
                         <button class="btn btn-danger" @click="showClearCacheModal = true">🗑️ 清理缓存</button>
                         <button class="btn btn-secondary" @click="restartProxyManager">🔧 重启管理程序</button>
                         <button class="btn btn-secondary" @click="fetchAllData">🔄 刷新状态</button>
+                        <button class="btn btn-info" @click="runSystemTest">🧪 系统测试</button>
                     </div>
 
                     <!-- 部署进度 -->
@@ -548,7 +549,7 @@
                 <div class="modal-body">
                     <p>此操作不可恢复，将删除已缓存的文件。</p>
                     <p class="text-small text-muted mt-2">
-                        缓存位置: {{ config.CACHE_BASE || '/mnt/HDD/cache/Tengine' }}
+                        缓存位置: {{ config.CACHE_BASE || '/mnt/HDD/TProxy/cache' }}
                     </p>
                 </div>
                 <div class="modal-footer">
