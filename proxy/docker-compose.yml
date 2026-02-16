@@ -1,0 +1,36 @@
+services:
+  dnsmasq:
+    image: jpillora/dnsmasq:latest
+    container_name: dnsmasq
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./dnsmasq/dnsmasq.conf:/etc/dnsmasq.conf:ro
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  tengine:
+    build: ./tengine
+    image: local/tengine:3.1.0-proxy
+    container_name: tengine
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - dnsmasq
+    volumes:
+      - ./tengine/nginx.conf:/usr/local/tengine/conf/nginx.conf:ro
+      - /mnt/HDD/cache/Tengine:/data/cache
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"

@@ -1,0 +1,26 @@
+[Unit]
+Description=Proxy Manager Web Console
+Documentation=https://github.com/your-org/proxy-manager
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/TProxy/proxy-manager
+ExecStart=/opt/conda3/bin/python /opt/TProxy/proxy-manager/main.py
+Restart=always
+RestartSec=5
+User=root
+Environment="PROXY_DIR=/opt/TProxy/proxy"
+Environment="PORT=5557"
+Environment="DEBUG=false"
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/TProxy/proxy-manager /opt/TProxy/proxy
+
+[Install]
+WantedBy=multi-user.target

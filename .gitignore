@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Claude Code
+.claude/
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Environment
+.env.local
+.env.*.local
+
+# Cache
+cache/
+*.cache
+
+# System
+*.pid
+*.socket
+
+# Docker
+docker-compose.override.yml
+
+# Backup
+*.bak
+*.backup
+*.old
