@@ -82,6 +82,7 @@ def get_status():
         return json_response({
             'containers': docker_ctl.get_all_status(),
             'nginx': monitor.get_nginx_stats(),
+            'cache': monitor.get_cache_stats(),
             'cache_size': monitor.get_cache_size(),
             'disk': monitor.get_disk_usage(),
             'system': monitor.get_system_info()
@@ -142,6 +143,42 @@ def manage_dns_hosts():
         result['message'] = 'DNS 解析已更新并热重载'
 
     return json_response(result)
+
+
+@app.route('/api/hosts-master', methods=['GET', 'POST'])
+def manage_hosts_master():
+    """管理 hosts-master.txt 单文件配置"""
+    hosts_master_file = '/mnt/HDD/TProxy/hosts-master.txt'
+
+    if request.method == 'GET':
+        # 读取 hosts-master.txt 内容
+        try:
+            with open(hosts_master_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return json_response({'content': content, 'file': hosts_master_file})
+        except Exception as e:
+            return json_response({'error': f'读取文件失败: {str(e)}'}, 500)
+
+    if not check_auth():
+        return json_response({'error': 'Unauthorized'}, 401)
+
+    # 保存 hosts-master.txt 内容
+    content = request.json.get('content', '')
+    try:
+        with open(hosts_master_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        # 重启 generator 容器以重新生成配置
+        import subprocess
+        try:
+            subprocess.run(['docker', 'restart', 'proxy-generator'], timeout=10)
+            message = 'hosts-master.txt 已保存，配置生成器已重启'
+        except:
+            message = 'hosts-master.txt 已保存，请手动重启 proxy-generator 容器'
+
+        return json_response({'success': True, 'message': message})
+    except Exception as e:
+        return json_response({'error': f'保存文件失败: {str(e)}'}, 500)
 
 
 @app.route('/api/nginx/reload', methods=['POST'])

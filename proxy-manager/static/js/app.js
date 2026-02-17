@@ -43,6 +43,9 @@ createApp({
             activeConfigGroup: 'network',
             // DNS 配置
             dnsContent: '',
+            // Hosts Master 配置
+            hostsMasterContent: '',
+            hostsMasterStats: null,
             // 日志
             logs: '点击上方按钮查看日志...',
             currentLog: '',
@@ -72,6 +75,9 @@ createApp({
 
     computed: {
         // 容器状态样式
+        generatorStatusClass() {
+            return this.status.containers['proxy-generator']?.status || 'unknown';
+        },
         dnsmasqStatusClass() {
             return this.status.containers.dnsmasq?.status || 'unknown';
         },
@@ -80,10 +86,11 @@ createApp({
         },
         // 系统健康状态
         systemHealth() {
+            const generator = this.status.containers['proxy-generator']?.status;
             const dnsmasq = this.status.containers.dnsmasq?.status;
             const tengine = this.status.containers.tengine?.status;
-            if (dnsmasq === 'running' && tengine === 'running') return 'healthy';
-            if (dnsmasq === 'running' || tengine === 'running') return 'warning';
+            if (generator === 'running' && dnsmasq === 'running' && tengine === 'running') return 'healthy';
+            if (generator === 'running' || dnsmasq === 'running' || tengine === 'running') return 'warning';
             return 'error';
         }
     },
@@ -121,7 +128,8 @@ createApp({
                 this.fetchConfig(),
                 this.fetchConfigTemplate(),
                 this.fetchDns(),
-                this.fetchSystemStatus()
+                this.fetchSystemStatus(),
+                this.fetchHostsMaster()
             ]);
         },
 
@@ -418,6 +426,110 @@ createApp({
             }
         },
 
+        // 获取 hosts-master.txt 配置
+        async fetchHostsMaster() {
+            try {
+                const res = await axios.get(`${API_BASE}/api/hosts-master`);
+                this.hostsMasterContent = res.data.content || '';
+                this.calculateHostsStats();
+            } catch (e) {
+                console.error('获取 hosts-master.txt 失败:', e);
+                // 如果文件不存在，使用默认内容
+                this.hostsMasterContent = `; TProxy hosts-master.txt 配置文件
+; 格式说明:
+;   ; @category <类别>     - 缓存分类 (docker/yum/pypi/github/other)
+;   ; @cache <过期时间>    - 缓存时间 (30d, 7d, 1h)
+;   ; @real-ip <IP:端口>  - 源站真实地址
+;   ; @nocache            - 禁用缓存
+;   address=/域名/代理IP   - 域名解析规则
+
+; ========================================
+; Docker 镜像加速
+; ========================================
+; @category docker
+; @cache 30d
+; @real-ip 54.236.113.205:443
+address=/docker.io/192.168.0.36
+address=/registry-1.docker.io/192.168.0.36
+address=/production.cloudflare.docker.com/192.168.0.36
+
+; ========================================
+; PyPI 镜像加速
+; ========================================
+; @category pypi
+; @cache 7d
+address=/pypi.org/192.168.0.36
+
+; ========================================
+; YUM 源加速
+; ========================================
+; @category yum
+; @cache 1d
+address=/repo.openeuler.org/192.168.0.36
+
+; ========================================
+; GitHub 加速
+; ========================================
+; @category github
+; @cache 7d
+address=/github.com/192.168.0.36
+address=/api.github.com/192.168.0.36
+`;
+                this.calculateHostsStats();
+            }
+        },
+
+        // 保存 hosts-master.txt 配置
+        async saveHostsMaster() {
+            try {
+                const res = await axios.post(`${API_BASE}/api/hosts-master`,
+                    { content: this.hostsMasterContent },
+                    { headers: { 'Authorization': AUTH_TOKEN } }
+                );
+                this.notify('success', res.data.message || 'hosts-master.txt 已保存');
+                this.calculateHostsStats();
+            } catch (e) {
+                this.notify('error', '保存失败: ' + (e.response?.data?.error || e.message));
+            }
+        },
+
+        // 计算 hosts-master.txt 统计信息
+        calculateHostsStats() {
+            const stats = {
+                total: 0,
+                docker: 0,
+                yum: 0,
+                pypi: 0,
+                github: 0,
+                other: 0
+            };
+
+            const lines = this.hostsMasterContent.split('\n');
+            let currentCategory = 'other';
+
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith('#')) continue;
+
+                // 检查类别标记
+                if (trimmed.startsWith('; @category ')) {
+                    const category = trimmed.substring(12).trim();
+                    if (['docker', 'yum', 'pypi', 'github', 'other'].includes(category)) {
+                        currentCategory = category;
+                    }
+                    continue;
+                }
+
+                // 统计 address 规则
+                if (trimmed.startsWith('address=/')) {
+                    stats.total++;
+                    stats[currentCategory]++;
+                }
+            }
+
+            this.hostsMasterStats = stats;
+        },
+
         // 重载 Nginx
         async reloadNginx() {
             try {
@@ -525,6 +637,11 @@ createApp({
                 restarting: '重启中'
             };
             return texts[status] || status;
+        },
+
+        // 获取容器状态样式类
+        getContainerStatusClass(name) {
+            return this.status.containers[name]?.status || 'unknown';
         },
 
         // 系统测试

@@ -84,6 +84,7 @@
                     <button class="tab" :class="{ active: currentTab === 'overview' }" @click="switchTab('overview')">📊 概览</button>
                     <button class="tab" :class="{ active: currentTab === 'config' }" @click="switchTab('config')">⚙️ 配置</button>
                     <button class="tab" :class="{ active: currentTab === 'dns' }" @click="switchTab('dns')">🌐 DNS</button>
+                    <button class="tab" :class="{ active: currentTab === 'hosts' }" @click="switchTab('hosts')">📝 Hosts配置</button>
                     <button class="tab" :class="{ active: currentTab === 'logs' }" @click="switchTab('logs')">📜 日志</button>
                 </div>
             </div>
@@ -91,9 +92,27 @@
             <!-- Overview Tab -->
             <div v-show="currentTab === 'overview'">
                 <!-- Status Cards -->
-                <div class="grid-3">
+                <div class="grid-4" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem;">
                     <div class="card">
-                        <h3>🌐 DNS 服务 (Dnsmasq)</h3>
+                        <h3>📝 配置生成器</h3>
+                        <div class="status-card">
+                            <div class="status-icon" :class="getContainerStatusClass('proxy-generator')">
+                                {{ getStatusIcon(status.containers['proxy-generator']?.status) }}
+                            </div>
+                            <div class="status-text">
+                                <div class="status-label">状态</div>
+                                <div class="status-value" :class="'status-' + getContainerStatusClass('proxy-generator')">
+                                    {{ getStatusText(status.containers['proxy-generator']?.status) }}
+                                </div>
+                            </div>
+                        </div>
+                        <p class="text-small text-muted mt-2">
+                            健康检查: {{ status.containers['proxy-generator']?.health || 'N/A' }}
+                        </p>
+                    </div>
+
+                    <div class="card">
+                        <h3>🌐 DNS 服务</h3>
                         <div class="status-card">
                             <div class="status-icon" :class="dnsmasqStatusClass">
                                 {{ getStatusIcon(status.containers.dnsmasq?.status) }}
@@ -111,7 +130,7 @@
                     </div>
 
                     <div class="card">
-                        <h3>🔄 代理服务 (Tengine)</h3>
+                        <h3>🔄 代理服务</h3>
                         <div class="status-card">
                             <div class="status-icon" :class="tengineStatusClass">
                                 {{ getStatusIcon(status.containers.tengine?.status) }}
@@ -142,11 +161,27 @@
                                 <div class="status-value">{{ status.cache_size }}</div>
                             </div>
                         </div>
+                        <div class="mt-2">
+                            <span class="badge badge-primary">
+                                今日请求: {{ status.cache?.requests_today || 0 }}
+                            </span>
+                            <span class="badge badge-success" v-if="status.cache?.hit_rate !== 'N/A'">
+                                命中率: {{ status.cache?.hit_rate }}
+                            </span>
+                        </div>
+                        <div class="mt-2" v-if="status.cache?.total > 0">
+                            <span class="badge badge-info">
+                                HIT: {{ status.cache?.hits || 0 }} / MISS: {{ status.cache?.misses || 0 }}
+                            </span>
+                        </div>
                         <div v-if="status.disk.available" class="mt-2 text-small text-muted">
                             可用空间: {{ status.disk.available }}
                             <span class="badge" :class="parseInt(status.disk.percent) > 80 ? 'badge-danger' : 'badge-success'">
                                 {{ status.disk.percent }}
                             </span>
+                        </div>
+                        <div v-if="status.cache?.note" class="mt-2 text-small text-muted">
+                            ℹ️ {{ status.cache.note }}
                         </div>
                     </div>
                 </div>
@@ -514,6 +549,59 @@
                     <button class="btn btn-success mt-4" @click="saveDns">
                         💾 保存并热重载
                     </button>
+                </div>
+            </div>
+
+            <!-- Hosts Master Tab -->
+            <div v-show="currentTab === 'hosts'">
+                <div class="card">
+                    <h2>📝 hosts-master.txt 单文件配置</h2>
+                    <p class="text-muted mb-2">
+                        通过 hosts-master.txt 统一管理域名解析规则。修改后保存会自动重启配置生成器。
+                    </p>
+
+                    <!-- 格式说明 -->
+                    <div class="card" style="background: #f5f5f5; border: 1px solid #ddd; margin-bottom: 1rem;">
+                        <h3 style="font-size: 0.9rem; margin-bottom: 0.5rem;">📖 配置格式说明</h3>
+                        <pre style="font-size: 0.8rem; margin: 0; padding: 0.5rem; background: #fff;">
+; @category &lt;类别&gt;        - 缓存分类 (docker/yum/pypi/github/other)
+; @cache &lt;过期时间&gt;         - 缓存时间 (30d, 7d, 1h)
+; @real-ip &lt;IP:端口&gt;       - 源站真实地址 (用于回源)
+; @nocache                   - 禁用缓存
+; @desc &lt;描述&gt;             - 备注说明
+
+address=/&lt;域名&gt;/&lt;代理IP&gt;     - 域名解析规则
+
+# 示例:
+; @category docker
+; @cache 30d
+; @real-ip 54.236.113.205:443
+address=/docker.io/192.168.0.36
+                        </pre>
+                    </div>
+
+                    <textarea v-model="hostsMasterContent" class="form-control" rows="20" style="font-family: monospace;"></textarea>
+                    <div class="mt-4">
+                        <button class="btn btn-success" @click="saveHostsMaster">
+                            💾 保存并重启生成器
+                        </button>
+                        <button class="btn btn-secondary" @click="fetchHostsMaster">
+                            🔄 重置
+                        </button>
+                    </div>
+
+                    <!-- 统计信息 -->
+                    <div v-if="hostsMasterStats" class="mt-4" style="background: #e8f5e9; padding: 1rem; border-radius: 0.5rem;">
+                        <h4 style="margin: 0 0 0.5rem 0;">📊 配置统计</h4>
+                        <div style="font-size: 0.875rem;">
+                            <span>总规则数: <strong>{{ hostsMasterStats.total }}</strong></span>
+                            <span style="margin-left: 1rem;">Docker: <strong>{{ hostsMasterStats.docker }}</strong></span>
+                            <span style="margin-left: 1rem;">YUM: <strong>{{ hostsMasterStats.yum }}</strong></span>
+                            <span style="margin-left: 1rem;">PyPI: <strong>{{ hostsMasterStats.pypi }}</strong></span>
+                            <span style="margin-left: 1rem;">GitHub: <strong>{{ hostsMasterStats.github }}</strong></span>
+                            <span style="margin-left: 1rem;">其他: <strong>{{ hostsMasterStats.other }}</strong></span>
+                        </div>
+                    </div>
                 </div>
             </div>
 

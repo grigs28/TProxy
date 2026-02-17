@@ -34,7 +34,7 @@ class DockerController:
     def get_all_status(self) -> Dict[str, Dict]:
         """获取所有相关容器状态"""
         containers = {}
-        for name in ['dnsmasq', 'tengine']:
+        for name in ['proxy-generator', 'dnsmasq', 'tengine']:
             containers[name] = self.get_container_status(name)
         return containers
 
