@@ -39,3 +39,6 @@ logs/
 .cache/
 .pytest_cache/
 .superpowers/
+
+# Playwright MCP 的截图与无障碍快照 —— 是调试产物，不属于项目
+.playwright-mcp/
