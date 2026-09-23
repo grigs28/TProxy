@@ -565,6 +565,98 @@ async function createConfd() {
   load();
 }
 
+// ---- 极简 Markdown 渲染 ----
+// 刻意只支持更新日志用得到的语法：标题、列表、粗体、行内代码、链接、分隔线。
+// 不引第三方库 —— 整个界面是免构建的原生 JS，为一份日志拉个依赖不划算。
+//
+// 安全要点：**先整体转义，再套标记**。顺序反过来就等于把文件内容当 HTML 执行。
+// CHANGELOG.md 虽然在本仓库里，但它是纯文本、可能被任何人编辑，
+// 渲染它不该给出一条执行路径。链接也只放行 http/https，挡掉 javascript: 之类。
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+// 行内标记。输入必须是已转义文本 —— 返回的字符串里除自己生成的标签外
+// 不可能再出现别的标签。
+function mdInline(s) {
+  return s
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (all, text, href) =>
+      /^https?:\/\//i.test(href)
+        ? `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>`
+        : text);
+}
+
+function renderMarkdown(md) {
+  const out = [];
+  let inList = false;
+  let para = [];
+
+  const closeList = () => { if (inList) { out.push("</ul>"); inList = false; } };
+  const flushPara = () => {
+    if (para.length) { out.push(`<p>${mdInline(para.join(" "))}</p>`); para = []; }
+  };
+  const closeAll = () => { flushPara(); closeList(); };
+
+  for (const raw of escapeHtml(md).split("\n")) {
+    const line = raw.replace(/\s+$/, "");
+    let m;
+
+    if (!line.trim()) { closeAll(); continue; }
+
+    if (/^-{3,}$/.test(line.trim())) { closeAll(); out.push("<hr>"); continue; }
+
+    if ((m = line.match(/^(#{1,4})\s+(.*)$/))) {
+      closeAll();
+      // 下移一级：页面已有 h1，日志里的 # 不该抢主标题的位置
+      const lvl = Math.min(m[1].length + 1, 5);
+      out.push(`<h${lvl}>${mdInline(m[2])}</h${lvl}>`);
+      continue;
+    }
+
+    if ((m = line.match(/^\s*[-*]\s+(.*)$/))) {
+      flushPara();
+      if (!inList) { out.push("<ul>"); inList = true; }
+      out.push(`<li>${mdInline(m[1])}</li>`);
+      continue;
+    }
+
+    // 普通行续接到当前段落。日志是按列宽硬折行的，
+    // 逐行成段会渲染成一堆碎句，所以要按 Markdown 的软换行合并。
+    closeList();
+    para.push(line.trim());
+  }
+  closeAll();
+  return out.join("");
+}
+
+// ---- 更新日志 ----
+async function openChangelog() {
+  const dlg = $("changelog-dialog");
+  const body = $("changelog-body");
+  body.innerHTML = "";
+  body.appendChild(emptyBox("读取中…"));
+  dlg.showModal();
+
+  try {
+    const d = await getJSON("/api/changelog");
+    body.innerHTML = "";
+    if (!d.markdown) {
+      body.appendChild(emptyBox("读不到更新日志 —— 检查 CHANGELOG.md 是否随部署一起同步"));
+      return;
+    }
+    // renderMarkdown 先转义再套标记，故这里赋 innerHTML 是安全的
+    body.innerHTML = renderMarkdown(d.markdown);
+    $("changelog-title").textContent = "更新日志";
+  } catch (e) {
+    body.innerHTML = "";
+    body.appendChild(emptyBox(`读取失败：${e.message}`));
+  }
+}
+
 const ALL_BOXES = ["cache-list", "hit-list", "rule-list", "cert-list", "server-list"];
 const ALL_EXTRA_BOXES = ["root-ca"];
 
@@ -651,6 +743,9 @@ function bindEvents() {
   $("add-confd-btn").addEventListener("click", createConfd);
   $("confd-save").addEventListener("click", saveConfd);
   $("confd-cancel").addEventListener("click", () => $("confd-dialog").close());
+  // 更新日志
+  $("version").addEventListener("click", openChangelog);
+  $("changelog-close").addEventListener("click", () => $("changelog-dialog").close());
   // 证书
   $("add-cert-btn").addEventListener("click", () => openCertDialog(""));
   $("cert-preview-btn").addEventListener("click", previewCert);

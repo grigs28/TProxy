@@ -20,7 +20,8 @@ from backend.config_read import parse_dnsmasq_rules, parse_nginx_servers
 from backend.hitrate import all_hitrate
 from backend.confd import add_conf, list_confs, read_conf, write_conf
 from backend.upstream import CATEGORIES, apply_upstream, preview_upstream
-from version import asset_version, get_version
+from version import (DEFAULT_CHANGELOG, asset_version, get_version,
+                     read_changelog, version_from_changelog)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -32,6 +33,9 @@ DEFAULTS = {
     "TPROXY_LOG_DIR": "/var/log/nginx",
     # 配置根目录 —— 新增上游时要改这里面的 dnsmasq/conf.d/ca
     "TPROXY_PROXY_DIR": "/opt/TProxy/proxy",
+    # 版本号的唯一来源。容器内由 compose 挂载（:ro）；
+    # 本机直跑时该路径就是仓库根的同名文件。
+    "TPROXY_CHANGELOG": DEFAULT_CHANGELOG,
     "YZ_LOGIN_URL": "http://192.168.0.8",
     # 用应用引用而非硬编码回调 URL：在 yz-login 后台改回调地址时自动跟随
     "YZ_APP_REF": "id:55",
@@ -191,9 +195,22 @@ def create_app():
         return jsonify({
             "status": "ok",
             "version": get_version(),
-            # 构建指纹：不升阶段版本号也能分辨「部署的是不是新版」
+            # 构建指纹：不升版本号也能分辨「部署的是不是新版」
             "build": asset_version(),
             "user": session.get("user"),
+        })
+
+    @app.route("/api/changelog")
+    def changelog():
+        """整份更新日志，供界面点版本号时展示。
+
+        版本号也一并返回（取自同一文件），使得「显示 0.2.7 但日志里最新是 0.2.8」
+        这种不一致在界面上直接可见，而不是靠人去比对。
+        """
+        path = cfg("TPROXY_CHANGELOG")
+        return jsonify({
+            "markdown": read_changelog(path),
+            "version": version_from_changelog(path) or get_version(),
         })
 
     @app.route("/api/cache")

@@ -82,17 +82,23 @@
     color: var(--muted);
   }
   .sep { color: var(--faint); }
+  /* 版本号同时是「打开更新日志」的按钮 —— 版本号本身没有别的可点之处，
+     不必再单独放一个入口 */
   .ver {
     font-family: var(--mono);
     font-size: 14px;
     color: var(--faint);
+    background: transparent;
     border: 1px solid var(--border);
     border-radius: 3px;
     padding: 1px 6px;
     margin-left: 10px;
     font-weight: 400;
     letter-spacing: 0;
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
   }
+  .ver:hover, .ver:focus { color: var(--accent); border-color: var(--accent); }
   .user {
     color: var(--text);
     max-width: 12em;
@@ -366,7 +372,42 @@
   .msg.ok { color: var(--ok); }
   .msg.err { color: var(--bad); }
 
-  /* ---- 改动预览 ---- */
+  /* ---- 更新日志（渲染后的 Markdown）----
+   页面的全局 h2 是「区块标题」样式（大写、带一条横线），
+   日志里的 h2 是「版本号」，语义不同，必须在这里覆盖掉。 */
+.md { font-size: 14.5px; line-height: 1.75; max-height: 62vh; }
+.md > :first-child { margin-top: 0; }
+.md h2, .md h3, .md h4, .md h5 {
+  display: block;
+  text-transform: none;
+  letter-spacing: 0;
+  margin: 20px 0 8px;
+}
+.md h2::after { display: none; }
+.md h2 { font-size: 18px; color: var(--text); margin-top: 0; }
+/* 版本条目（源文件里的 ## ）→ h3。每条之间一条分隔线，便于定位到某一版；
+   第一条不加，它上面已经有 <hr> 了。 */
+.md h3 {
+  font-size: 16px;
+  color: var(--text);
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.md h3:first-of-type { border-top: none; padding-top: 0; }
+.md h4, .md h5 { font-size: 14px; color: var(--muted); margin: 14px 0 6px; }
+.md p { margin: 8px 0; }
+.md ul { margin: 6px 0; padding-left: 20px; }
+.md li { margin: 4px 0; }
+.md hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+.md strong { color: var(--text); font-weight: 600; }
+.md code {
+  background: var(--raise);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 13.5px;
+}
+
+/* ---- 改动预览 ---- */
   .changes { border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
   .change { padding: 10px 12px; border-bottom: 1px solid var(--border); }
   .change:last-child { border-bottom: none; }
@@ -392,7 +433,7 @@
 <div class="wrap">
 
   <header>
-    <h1>TProxy<span class="sub">缓存管理</span><span class="ver" id="version"></span></h1>
+    <h1>TProxy<span class="sub">缓存管理</span><button class="ver" id="version" title="查看更新日志"></button></h1>
     <div class="host">
       <span><span class="dot" id="health-dot"></span><span id="health-text">连接中…</span></span>
       <span class="sep" id="host-sep" hidden>·</span>
@@ -500,6 +541,19 @@
     <button class="btn primary" id="cert-apply-btn" disabled>确认签发</button>
   </div>
   <div class="msg" id="cert-msg"></div>
+</dialog>
+
+<!-- 更新日志：点顶栏版本号打开 -->
+<dialog id="changelog-dialog">
+  <h3 id="changelog-title">更新日志</h3>
+  <p class="hint">
+    版本号写在仓库根的 <code>CHANGELOG.md</code> 里，此处显示的就是该文件 ——
+    界面顶栏的版本号也从它取，不存在两份各自维护的版本号。
+  </p>
+  <div class="md scroll" id="changelog-body"></div>
+  <div class="actions">
+    <button class="btn" id="changelog-close">关闭</button>
+  </div>
 </dialog>
 
 <!-- __ASSET_V__ 由后端替换为静态资源的内容指纹（见 version.asset_version）。

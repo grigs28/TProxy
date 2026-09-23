@@ -111,6 +111,91 @@ def test_index_references_current_asset_version(client):
     assert f"app.js?v={asset_version()}" in html
 
 
+# ---- CHANGELOG ----
+# 版本号写在 CHANGELOG.md 里，其他地方读它 —— 单一来源，不会各写各的。
+
+def test_changelog_version_is_parsed_from_file(tmp_path):
+    from version import version_from_changelog
+    p = tmp_path / "CHANGELOG.md"
+    p.write_text("# 更新日志\n\n## [1.2.3] - 2026-01-01\n\n### 新增\n- x\n")
+    assert version_from_changelog(str(p)) == "1.2.3"
+
+
+def test_changelog_version_takes_the_first_entry(tmp_path):
+    """最新的在最上面 —— 取第一条，不是随便一条。"""
+    from version import version_from_changelog
+    p = tmp_path / "CHANGELOG.md"
+    p.write_text("## [0.9.9] - 2026-01-02\n\n## [0.9.8] - 2026-01-01\n")
+    assert version_from_changelog(str(p)) == "0.9.9"
+
+
+@pytest.mark.parametrize("text", [
+    "",
+    "# 更新日志\n还没有任何版本\n",
+    "## [abc] - 2026-01-01\n",
+    "## 1.2.3\n",              # 缺方括号
+    "## [1.2] - 2026-01-01\n",  # 不是三位
+])
+def test_changelog_version_rejects_garbage(tmp_path, text):
+    """解析不出就返回 None，由调用方决定回退 —— 不能瞎猜一个版本号出来。"""
+    from version import version_from_changelog
+    p = tmp_path / "CHANGELOG.md"
+    p.write_text(text)
+    assert version_from_changelog(str(p)) is None
+
+
+def test_changelog_version_missing_file(tmp_path):
+    from version import version_from_changelog
+    assert version_from_changelog(str(tmp_path / "nope.md")) is None
+
+
+def test_repo_changelog_has_a_valid_version():
+    """仓库里的 CHANGELOG.md 必须真的能被解析出版本号。
+
+    这条是防漂移的闸门：格式写歪了、或忘了加版本条目，
+    界面上的版本号会变成回退值，而那时已经部署上线了。
+    """
+    from version import version_from_changelog
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    v = version_from_changelog(os.path.join(repo, "CHANGELOG.md"))
+    assert v, "无法从仓库根的 CHANGELOG.md 解析出版本号"
+    assert v.count(".") == 2
+
+
+def test_get_version_prefers_env(monkeypatch):
+    """环境变量仍要能覆盖，便于灰度或多实例对照。"""
+    from version import get_version
+    monkeypatch.setenv("MANAGER_VERSION", "9.9.9")
+    assert get_version() == "9.9.9"
+
+
+def test_api_changelog_returns_markdown(client, monkeypatch, tmp_path):
+    p = tmp_path / "CL.md"
+    p.write_text("# 更新日志\n\n## [1.2.3] - 2026-01-01\n\n### 新增\n- 一条\n")
+    monkeypatch.setenv("TPROXY_CHANGELOG", str(p))
+
+    r = client.get("/api/changelog")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert "一条" in d["markdown"]
+    assert d["version"] == "1.2.3"
+
+
+def test_api_changelog_missing_file_does_not_500(client, monkeypatch, tmp_path):
+    """文件读不到也要返回可用结构 —— 界面顶栏靠它显示版本，不能整页崩。"""
+    monkeypatch.setenv("TPROXY_CHANGELOG", str(tmp_path / "nope.md"))
+    r = client.get("/api/changelog")
+    assert r.status_code == 200
+    assert r.get_json()["markdown"] == ""
+
+
+def test_api_changelog_requires_login(client):
+    with client.session_transaction() as sess:
+        sess.clear()
+    assert client.get("/api/changelog").status_code == 401
+
+
 def test_index_is_not_cached_by_browser(client):
     """index.html 本身不能被缓存。
 

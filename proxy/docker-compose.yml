@@ -210,6 +210,13 @@ services:
       - ${CACHE_BASE}:${CACHE_BASE}:ro
       - ./logs/tengine:/var/log/nginx:ro            # 命中率统计的数据来源
       - ./tengine/nginx.conf:/opt/TProxy/proxy/tengine/nginx.conf:ro
+      # 版本号的唯一来源 —— 界面顶栏与更新日志弹层都读它。
+      # 挂载点必须与 version.DEFAULT_CHANGELOG 一致。
+      # 服务端每次请求都重新读盘，故改完内容即时生效、不必重启容器；
+      # 但**必须保留 inode**：bind mount 绑的是挂载时刻的 inode，
+      # 用会「写临时文件再改名」的方式覆盖（vim 默认行为、rsync 不带 --inplace）
+      # 会让容器永远读到旧内容。用 sync-to-target.sh 同步（带 --inplace）则无此问题。
+      - ../CHANGELOG.md:/opt/TProxy/CHANGELOG.md:ro
       # ---- 可写：仅新增上游需要改的那三处 ----
       # ⚠️ ca 目录含根 CA 私钥 —— 签发域名证书必须用它，故不得不给写权限。
       #    这意味着容器若被攻破即可伪造任意站点证书；SSO 的管理员限制是唯一屏障。
