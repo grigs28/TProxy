@@ -37,3 +37,7 @@ gitee.com
 pypi.org
 files.pythonhosted.org
 pypi.tuna.tsinghua.edu.cn
+# Node.js
+registry.npmjs.org
+registry.npmmirror.com
+nodejs.org
