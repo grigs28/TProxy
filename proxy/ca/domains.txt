@@ -41,3 +41,7 @@ pypi.tuna.tsinghua.edu.cn
 registry.npmjs.org
 registry.npmmirror.com
 nodejs.org
+# Java
+repo1.maven.org
+repo.maven.apache.org
+maven.aliyun.com
