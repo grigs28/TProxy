@@ -32,6 +32,23 @@ async function getJSON(path) {
   return r.json();
 }
 
+async function postJSON(path, body) {
+  const r = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  // 401 表示未登录（会话过期），直接回登录页而不是抛一句看不懂的错误
+  if (r.status === 401) {
+    window.location.reload();
+    throw new Error("登录状态已过期");
+  }
+  const d = await r.json().catch(() => ({}));
+  if (d && d.msg !== undefined) return d;
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return d;
+}
+
 // ---- 缓存总览 ----
 // 签名元素：未启用显示为虚线空槽，一眼可辨「哪类没在工作」。
 function renderCache(types) {
@@ -233,7 +250,8 @@ function renderServers(servers) {
   }
 
   const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>配置</th><th>端口</th><th>缓存区</th></tr></thead>";
+  table.innerHTML =
+    "<thead><tr><th>配置</th><th>端口</th><th>缓存区</th><th></th></tr></thead>";
   const tb = document.createElement("tbody");
   for (const s of servers) {
     const tr = document.createElement("tr");
@@ -247,11 +265,148 @@ function renderServers(servers) {
     const td3 = document.createElement("td");
     td3.className = "mono muted";
     td3.textContent = s.cache_zone || "—";
-    tr.append(td1, td2, td3);
+
+    const td4 = document.createElement("td");
+    td4.style.textAlign = "right";
+    const btn = document.createElement("button");
+    btn.className = "btn";
+    btn.textContent = "编辑";
+    btn.addEventListener("click", () => openConfd(s.file));
+    td4.appendChild(btn);
+
+    tr.append(td1, td2, td3, td4);
     tb.appendChild(tr);
   }
   table.appendChild(tb);
   box.appendChild(table);
+}
+
+// ---- 添加上游 ----
+async function openUpstream() {
+  const dlg = $("upstream-dialog");
+  $("up-domain").value = "";
+  $("up-preview").innerHTML = "";
+  $("up-msg").textContent = "";
+  $("up-apply-btn").disabled = true;
+
+  try {
+    const d = await getJSON("/api/upstream/categories");
+    const sel = $("up-category");
+    sel.innerHTML = "";
+    for (const c of d.categories || []) {
+      const o = document.createElement("option");
+      o.value = c;
+      o.textContent = c;
+      sel.appendChild(o);
+    }
+  } catch (e) { /* 下拉为空时后面会提示 */ }
+
+  dlg.showModal();
+}
+
+async function previewUpstream() {
+  const domain = $("up-domain").value.trim();
+  const category = $("up-category").value;
+  const box = $("up-preview");
+  const msg = $("up-msg");
+  box.innerHTML = "";
+  msg.textContent = "";
+  $("up-apply-btn").disabled = true;
+
+  if (!domain) { msg.className = "msg err"; msg.textContent = "请填写域名"; return; }
+
+  try {
+    const d = await postJSON("/api/upstream/preview", { domain, category });
+    if (!d.ok) { msg.className = "msg err"; msg.textContent = d.msg; return; }
+
+    const wrap = document.createElement("div");
+    wrap.className = "changes";
+    for (const c of d.changes || []) {
+      const el = document.createElement("div");
+      el.className = "change";
+      const where = document.createElement("div");
+      where.className = "where";
+      where.textContent = `${c.file} · ${c.action}`;
+      const diff = document.createElement("div");
+      diff.className = "diff";
+      diff.textContent = c.diff;
+      const desc = document.createElement("div");
+      desc.className = "desc";
+      desc.textContent = c.desc;
+      el.append(where, diff, desc);
+      wrap.appendChild(el);
+    }
+    box.appendChild(wrap);
+    $("up-apply-btn").disabled = false;
+    if (d.note) { msg.className = "msg"; msg.textContent = d.note; }
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = `预览失败：${e.message}`;
+  }
+}
+
+async function applyUpstream() {
+  const domain = $("up-domain").value.trim();
+  const category = $("up-category").value;
+  const msg = $("up-msg");
+  $("up-apply-btn").disabled = true;
+  msg.className = "msg";
+  msg.textContent = "执行中…";
+
+  try {
+    const d = await postJSON("/api/upstream/apply", { domain, category });
+    if (!d.ok) { msg.className = "msg err"; msg.textContent = d.msg; return; }
+    msg.className = "msg ok";
+    // 把重启命令一并显示 —— 不自动重启，避免界面替人做生产动作
+    msg.textContent = d.msg + (d.restart_hint ? `　生效需执行：${d.restart_hint}` : "");
+    load();
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = `添加失败：${e.message}`;
+    $("up-apply-btn").disabled = false;
+  }
+}
+
+// ---- 编辑分流配置 ----
+let editingConf = "";
+
+async function openConfd(name) {
+  const dlg = $("confd-dialog");
+  $("confd-title").textContent = `编辑 ${name}`;
+  $("confd-msg").textContent = "";
+  editingConf = name;
+  try {
+    const d = await getJSON(`/api/confd/${encodeURIComponent(name)}`);
+    $("confd-content").value = d.content || "";
+    dlg.showModal();
+  } catch (e) {
+    alert(`读取失败：${e.message}`);
+  }
+}
+
+async function saveConfd() {
+  const msg = $("confd-msg");
+  msg.className = "msg";
+  msg.textContent = "保存中…";
+  try {
+    const d = await postJSON(`/api/confd/${encodeURIComponent(editingConf)}`,
+                             { content: $("confd-content").value });
+    if (!d.ok) { msg.className = "msg err"; msg.textContent = d.msg; return; }
+    msg.className = "msg ok";
+    msg.textContent = d.msg + (d.restart_hint ? `　生效需执行：${d.restart_hint}` : "");
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = `保存失败：${e.message}`;
+  }
+}
+
+async function createConfd() {
+  const name = prompt("新分流配置的文件名（如 newrepo.conf）");
+  if (!name) return;
+  const d = await postJSON("/api/confd", { name });
+  if (!d.ok) { alert(d.msg); return; }
+  alert(d.msg + "\n\n生效需执行：" + (d.restart_hint || ""));
+  load();
 }
 
 const ALL_BOXES = ["cache-list", "hit-list", "rule-list", "cert-list", "server-list"];
@@ -316,5 +471,28 @@ async function load() {
   }
 }
 
+// ---- 事件绑定 ----
+function bindEvents() {
+  // 添加上游
+  $("add-upstream-btn").addEventListener("click", openUpstream);
+  $("up-preview-btn").addEventListener("click", previewUpstream);
+  $("up-apply-btn").addEventListener("click", applyUpstream);
+  $("up-cancel").addEventListener("click", () => $("upstream-dialog").close());
+  // 域名改动后需重新预览才允许提交 —— 避免「预览的是 A、提交的是 B」
+  $("up-domain").addEventListener("input", () => {
+    $("up-apply-btn").disabled = true;
+    $("up-preview").innerHTML = "";
+  });
+  $("up-category").addEventListener("change", () => {
+    $("up-apply-btn").disabled = true;
+    $("up-preview").innerHTML = "";
+  });
+  // 分流配置
+  $("add-confd-btn").addEventListener("click", createConfd);
+  $("confd-save").addEventListener("click", saveConfd);
+  $("confd-cancel").addEventListener("click", () => $("confd-dialog").close());
+}
+
+bindEvents();
 load();
 setInterval(load, 30000);

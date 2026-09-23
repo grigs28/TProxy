@@ -17,6 +17,8 @@ from backend.cache_stats import all_cache_usage
 from backend.certs import list_certs
 from backend.config_read import parse_dnsmasq_rules, parse_nginx_servers
 from backend.hitrate import all_hitrate
+from backend.confd import add_conf, list_confs, read_conf, write_conf
+from backend.upstream import CATEGORIES, apply_upstream, preview_upstream
 from version import get_version
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -27,6 +29,8 @@ DEFAULTS = {
     "TPROXY_CONF_D": "/opt/TProxy/proxy/tengine/conf.d",
     "TPROXY_CERTS_DIR": "/opt/TProxy/proxy/ca/certs",
     "TPROXY_LOG_DIR": "/var/log/nginx",
+    # 配置根目录 —— 新增上游时要改这里面的 dnsmasq/conf.d/ca
+    "TPROXY_PROXY_DIR": "/opt/TProxy/proxy",
     "YZ_LOGIN_URL": "http://192.168.0.8",
     # 用应用引用而非硬编码回调 URL：在 yz-login 后台改回调地址时自动跟随
     "YZ_APP_REF": "id:55",
@@ -189,6 +193,63 @@ def create_app():
     @app.route("/api/hitrate")
     def hitrate():
         return jsonify({"hitrate": all_hitrate(cfg("TPROXY_LOG_DIR"))})
+
+    # ---- 新增上游 ----
+    # 这两个端点会【写生产配置】，故只走 POST，且依赖 before_request 的登录校验。
+    @app.route("/api/upstream/preview", methods=["POST"])
+    def upstream_preview():
+        d = request.get_json(silent=True) or {}
+        return jsonify(preview_upstream(
+            d.get("domain", ""), d.get("category", ""), cfg("TPROXY_PROXY_DIR")))
+
+    @app.route("/api/upstream/apply", methods=["POST"])
+    def upstream_apply():
+        d = request.get_json(silent=True) or {}
+        r = apply_upstream(
+            d.get("domain", ""), d.get("category", ""), cfg("TPROXY_PROXY_DIR"))
+        # 配置改动要重启容器才生效（:ro 挂载 + bind mount 的 inode 特性，
+        # 仅 nginx -s reload 不会重新挂载），故把命令一并返回给界面显示
+        if r.get("needs_restart"):
+            r["restart_hint"] = "cd /opt/TProxy/proxy && docker compose restart dnsmasq tengine"
+        return jsonify(r)
+
+    @app.route("/api/upstream/categories")
+    def upstream_categories():
+        return jsonify({"categories": sorted(CATEGORIES.keys())})
+
+    # ---- 分流配置（conf.d）读写 ----
+    def confd_dir():
+        return os.path.join(cfg("TPROXY_PROXY_DIR"), "tengine", "conf.d")
+
+    @app.route("/api/confd")
+    def confd_list():
+        return jsonify({"files": list_confs(confd_dir())})
+
+    @app.route("/api/confd", methods=["POST"])
+    def confd_create():
+        """新建分流配置（带模板）。"""
+        d = request.get_json(silent=True) or {}
+        ok, msg = add_conf(confd_dir(), d.get("name", ""))
+        return jsonify({"ok": ok, "msg": msg,
+                        "restart_hint": "cd /opt/TProxy/proxy && docker compose restart tengine"})
+
+    @app.route("/api/confd/<name>", methods=["GET", "POST"])
+    def confd_item(name):
+        """读或保存单个分流配置。
+
+        ⚠️ 容器内没有 nginx，无法做真正的语法校验，只做结构性检查 ——
+        保存前请留意界面上的这条提示。
+        """
+        if request.method == "GET":
+            content = read_conf(confd_dir(), name)
+            if content is None:
+                return jsonify({"ok": False, "msg": "文件不存在或名字非法"}), 404
+            return jsonify({"ok": True, "name": name, "content": content})
+
+        d = request.get_json(silent=True) or {}
+        ok, msg = write_conf(confd_dir(), name, d.get("content", ""))
+        return jsonify({"ok": ok, "msg": msg,
+                        "restart_hint": "cd /opt/TProxy/proxy && docker compose restart tengine"})
 
     return app
 

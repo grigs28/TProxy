@@ -206,9 +206,16 @@ services:
       # MANAGER_SECRET_KEY 未设置时会自动生成并持久化到 MANAGER_STATE_DIR，
       # 既不随代码入库、容器重启也不掉登录态
     volumes:
-      - /opt/TProxy/proxy:/opt/TProxy/proxy:ro
+      # ---- 只读 ----
       - ${CACHE_BASE}:${CACHE_BASE}:ro
-      # nginx 日志（命中率统计的数据来源），只读
-      - ./logs/tengine:/var/log/nginx:ro
-      # session 密钥等运行态数据（唯一可写挂载）
+      - ./logs/tengine:/var/log/nginx:ro            # 命中率统计的数据来源
+      - ./tengine/nginx.conf:/opt/TProxy/proxy/tengine/nginx.conf:ro
+      # ---- 可写：仅新增上游需要改的那三处 ----
+      # ⚠️ ca 目录含根 CA 私钥 —— 签发域名证书必须用它，故不得不给写权限。
+      #    这意味着容器若被攻破即可伪造任意站点证书；SSO 的管理员限制是唯一屏障。
+      #    若要进一步收紧，可把签发动作移到宿主机、界面只负责触发。
+      - ./dnsmasq:/opt/TProxy/proxy/dnsmasq:rw
+      - ./tengine/conf.d:/opt/TProxy/proxy/tengine/conf.d:rw
+      - ./ca:/opt/TProxy/proxy/ca:rw
+      # session 密钥等运行态数据
       - ${CACHE_BASE}/manager:/var/lib/tproxy-manager:rw
