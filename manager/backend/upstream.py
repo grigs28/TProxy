@@ -153,33 +153,43 @@ def _append_dnsmasq_rule(path, domain, ip):
 
 
 def _add_server_name(path, domain):
-    """把域名加进 server_name。已存在则不重复（幂等）。"""
+    """把域名加进该文件里**每一段**未注释的 server_name。幂等。
+
+    必须遍历全部而不是只改第一段：一个 conf 文件通常有 HTTP 与 HTTPS
+    两段 server。只改第一段的话，域名在另一段上不匹配任何 server_name，
+    请求会落到 default_server 被 444 拒掉 ——
+    表现为「界面提示添加成功，但 https 根本用不了」。
+    os-repo.conf 就是这种两段结构。
+
+    server_name 常写成多行续行，追加到**首行**即可（首行不以 ; 结尾时
+    不能加分号，否则会截断后面的续行）。
+    """
     if not os.path.exists(path):
         raise FileNotFoundError(f"找不到分流配置: {path}")
 
     with open(path, encoding="utf-8") as f:
         content = f.read()
 
-    # 只看【未注释】的 server_name 行，避免把域名加到注释里
     lines = content.splitlines()
+    changed = False
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith("#") or "server_name" not in stripped:
-            continue
-        if not stripped.startswith("server_name"):
+        # 只看【未注释】的 server_name，避免把域名加到注释里
+        if stripped.startswith("#") or not stripped.startswith("server_name"):
             continue
         names = stripped.split(None, 1)[1].rstrip(";").split()
         if domain in names:
-            return False  # 已存在
-        # 在最后一个域名后追加，保持原有换行缩进
+            continue                      # 这一段已经有了
         new_line = line.rstrip()
         if new_line.endswith(";"):
             new_line = new_line[:-1].rstrip() + f" {domain};"
         else:
             new_line = new_line + f" {domain}"
         lines[i] = new_line
-        break
+        changed = True
 
+    if not changed:
+        return False
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return True

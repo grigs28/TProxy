@@ -173,6 +173,61 @@ def test_apply_rolls_back_on_signer_failure(tree):
     assert after_nginx == before_nginx, "tengine 配置未回滚"
 
 
+def test_add_server_name_updates_every_server_block(tree):
+    """一个 conf 里可能有多段 server（HTTP 一段、HTTPS 一段）。
+
+    只改第一段的话，域名在另一段上不匹配任何 server_name，
+    请求会落到 default_server 被 444 拒掉 ——
+    表现为「界面提示添加成功，但 https 根本用不了」。
+
+    os-repo.conf 正是这种结构，而 Debian / Proxmox 的源两种 scheme 都在用。
+    """
+    from backend.upstream import _add_server_name
+    p = tree / "tengine" / "conf.d" / "two.conf"
+    p.write_text(
+        "server {\n"
+        "    listen 80;\n"
+        "    server_name a.example.com b.example.com;\n"
+        "}\n"
+        "server {\n"
+        "    listen 443 ssl;\n"
+        "    server_name a.example.com;\n"
+        "}\n"
+    )
+    assert _add_server_name(str(p), "c.example.com") is True
+    content = p.read_text()
+    assert content.count("c.example.com") == 2, \
+        f"只加进了一段 server，另一段仍是 444：\n{content}"
+
+
+def test_add_server_name_handles_multiline_lists(tree):
+    """server_name 常写成多行续行，追加到首行同样要合法。"""
+    from backend.upstream import _add_server_name
+    p = tree / "tengine" / "conf.d" / "multi.conf"
+    p.write_text(
+        "server {\n"
+        "    server_name a.example.com b.example.com\n"
+        "                d.example.com e.example.com;\n"
+        "}\n"
+    )
+    assert _add_server_name(str(p), "f.example.com") is True
+    content = p.read_text()
+    assert "f.example.com" in content
+    assert content.count(";") == 1, f"分号被写坏了：\n{content}"
+
+
+def test_add_server_name_idempotent_across_blocks(tree):
+    from backend.upstream import _add_server_name
+    p = tree / "tengine" / "conf.d" / "idem.conf"
+    p.write_text(
+        "server {\n    server_name a.example.com;\n}\n"
+        "server {\n    server_name a.example.com;\n}\n"
+    )
+    assert _add_server_name(str(p), "z.example.com") is True
+    assert _add_server_name(str(p), "z.example.com") is False
+    assert p.read_text().count("z.example.com") == 2
+
+
 def test_categories_map_to_conf_files():
     """类型 → conf 文件的映射必须与实际 conf.d 里的文件对得上。"""
     assert CATEGORIES["docker"] == "registry.conf"
