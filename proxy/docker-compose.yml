@@ -37,9 +37,11 @@ services:
         soft: 65535
         hard: 65535
     healthcheck:
-      # 用 127.0.0.1 而非 localhost：容器内 localhost 解析到 ::1，
-      # 而 nginx 只监听 IPv4，会导致健康检查恒假失败
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      # 两点都重要：
+      # 1) 用 127.0.0.1 而非 localhost —— 容器内 localhost 解析到 ::1，nginx 只监听 IPv4
+      # 2) 打 /healthz 而非 / —— 根路径的 Host 不匹配任何 server_name，
+      #    会落到兜底块（return 444），健康检查会失败
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/healthz"]
       interval: 10s
       timeout: 5s
       retries: 3
