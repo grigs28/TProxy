@@ -3,6 +3,38 @@
 一条命令把 Linux 机器接入 TProxy 透明缓存。接入后**无需修改任何仓库/镜像/工具配置**，
 六类制品（系统包 / Docker / git / Python / Node.js / Java）自动命中本地缓存。
 
+## 两个版本
+
+| 版本 | 位置 | 用途 |
+|---|---|---|
+| **多文件版** | `client-setup.sh` + `lib/` | 本地直接运行，结构清晰、便于调试 |
+| **自包含版** | `dist/tp.client.sh` | 供**脚本分发平台**下发到集群节点 |
+
+两者功能等价。区别在于分发平台的硬性要求：
+
+> **脚本必须自包含**，只能依赖 `bas.sh` 和系统自带工具，不能假设同目录存在其他文件。
+
+所以 `dist/tp.client.sh` 把三个 `lib/` 模块合并进了单文件，并改用分发平台的
+`print_*` 输出函数（支持中英翻译）。
+
+### 修改流程
+
+**先改本地，再复制到发布平台**：
+
+```bash
+# 1. 改本地这一份
+vim client/dist/tp.client.sh
+
+# 2. 复制到发布平台（本机是 NAS 的 SMB 挂载，写入即同步）
+cp client/dist/tp.client.sh /mnt/79-sxiad/grigs/tp/tp.client.sh
+
+# 3. 验证平台可访问
+curl -sI http://192.168.0.79/sxiad/grigs/tp/tp.client.sh | head -1
+```
+
+**不要在发布平台上直接改** —— 那里没有版本控制，改动不可回滚，且下次从本地
+复制会覆盖掉。
+
 ## 用法
 
 ```bash
