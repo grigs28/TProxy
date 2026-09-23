@@ -9,7 +9,7 @@
 import os
 
 #: 当前版本。规则见 docs/stages/README.md（三位数逐位逢十进位）
-VERSION = "0.2.6"
+VERSION = "0.2.7"
 
 
 def get_version():
