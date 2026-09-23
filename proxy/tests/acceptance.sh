@@ -17,6 +17,11 @@ run "DNS 劫持与内网解析"  "$D/test-dns.sh"
 run "HTTP 分流"          "$D/test-http.sh"
 run "TLS 终结"           "$D/test-tls.sh"
 run "缓存行为"           "$D/test-cache.sh"
+run "Docker 镜像缓存"    "$D/test-docker.sh"
+run "git 仓库缓存"       "$D/test-git.sh"
+run "Python 缓存"        "$D/test-python.sh"
+run "Node.js 缓存"       "$D/test-nodejs.sh"
+run "Java 缓存"          "$D/test-java.sh"
 
 echo "--- 防绕过说明 ---"
 echo "  ℹ️ QUIC(UDP 443) 与 DoH/DoT 的阻断属于客户端与网络层范畴，不在本计划范围"
@@ -28,7 +33,7 @@ docker compose -f "$D/../docker-compose.yml" ps
 echo
 
 if [[ $fail -eq 0 ]]; then
-  echo "ACCEPTANCE-PASS（阶段 1-2 验收通过）"
+  echo "ACCEPTANCE-PASS（六类制品缓存验收通过）"
 else
   echo "ACCEPTANCE-FAIL（存在失败项，见上）"
 fi

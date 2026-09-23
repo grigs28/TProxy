@@ -42,11 +42,13 @@ USER gitcache
 WORKDIR /home/gitcache
 
 # 暴露端口
-EXPOSE 5000
+EXPOSE 4999
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -q -O- http://localhost:5000/ || exit 1
+# 健康检查：只探端口是否在监听。
+# 不能用 HTTP 请求 —— gitcache 是 git 协议代理而非网页服务器，
+# 对 / 的请求会返回错误（upstream prematurely closed connection），恒判失败。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD nc -z 127.0.0.1 4999 || exit 1
 
 # 默认命令
 ENTRYPOINT ["/usr/local/bin/gitcache"]
