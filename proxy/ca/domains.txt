@@ -1,0 +1,21 @@
+# proxy/ca/domains.txt —— 需签发证书的域名，每行一个
+# 计划 A 范围：系统包仓库
+# openEuler
+repo.openeuler.org
+mirrors.openeuler.org
+dl-cdn.openeuler.openatom.cn
+# Ubuntu
+archive.ubuntu.com
+security.ubuntu.com
+cn.archive.ubuntu.com
+ports.ubuntu.com
+# CentOS / EPEL
+mirror.centos.org
+mirrorlist.centos.org
+dl.fedoraproject.org
+mirrors.fedoraproject.org
+# 国内镜像站
+mirrors.aliyun.com
+mirrors.tuna.tsinghua.edu.cn
+mirrors.ustc.edu.cn
+mirrors.huaweicloud.com
