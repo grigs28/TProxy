@@ -1,0 +1,43 @@
+# TProxy 核心代理层
+# dnsmasq: 域名劫持 + 内网解析 + 上游兜底
+# tengine: 80/443 入口 + TLS 终结 + 按 Host 分流 + proxy_cache
+services:
+  dnsmasq:
+    image: alpine:3.19
+    container_name: v3-dnsmasq
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./dnsmasq/dnsmasq.conf:/etc/dnsmasq.conf:ro
+    command: >
+      sh -c "apk add --no-cache dnsmasq && exec dnsmasq -k -C /etc/dnsmasq.conf"
+    healthcheck:
+      test: ["CMD", "nslookup", "localhost", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  tengine:
+    image: nginx:alpine
+    container_name: v3-tengine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./tengine/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./tengine/conf.d:/etc/nginx/conf.d:ro
+      - ./ca/certs:/etc/nginx/certs:ro
+      - ${CACHE_BASE}/nginx:/var/cache/tproxy
+      - ./logs/tengine:/var/log/nginx
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    healthcheck:
+      # 用 127.0.0.1 而非 localhost：容器内 localhost 解析到 ::1，
+      # 而 nginx 只监听 IPv4，会导致健康检查恒假失败
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
