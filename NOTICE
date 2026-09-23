@@ -57,8 +57,29 @@ Copyright (c) 2026 grigs28
 
 **阶段 3-6**（计划 B，标签 `phase-3-6-cache-backends`）
 
-- Docker 镜像缓存（registry:2）
+- Docker 镜像缓存（registry:2，6 个上游实例）
 - git 仓库缓存（gitcache）
 - Python / Node.js / Java 缓存
+- 审查修复：git push 被错误路由（改为直连）、私有仓库经共享缓存无认证开放
+  （改为带凭据流量直连）、内容协商串味、补齐无缓存收益的劫持域名
 
-详见 `docs/stages/` 目录的阶段汇总。
+**阶段 7**（计划 C，标签 `phase-7-client-setup`）
+
+- `client-setup.sh`：一条命令接入（DNS + 根 CA + Docker/Java/运行时工具级证书）
+- 支持 `--rollback` 回滚
+- 审查修复：三个核心库文件因 `.gitignore` 规则从未入库、回滚恢复错版本、
+  回滚误删用户自有 CA
+
+**阶段 8**（计划 D，标签 `phase-8-management-ui`）
+
+- `manager/`：Flask + 原生 JS 的只读仪表盘（缓存占用 / 劫持规则 / 证书 / 分流入口）
+- 审查修复：缓存目录路径映射错误导致 4/6 类被误报为「未启用/空」
+  （含 os 缓存已有 75MB 数据却显示未启用）
+
+**安全须知补充**
+
+- 客户端接入需安装自建根 CA，该机经代理的 HTTPS 流量可被解密
+- git 缓存对**匿名只读**流量生效；带凭据的请求直连上游，不落入共享缓存
+
+详见 `docs/stages/` 目录的阶段汇总（22 份）、`docs/specs/`（架构规格）与
+`docs/plans/`（四份实施计划）。
