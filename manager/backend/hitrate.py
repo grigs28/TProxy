@@ -39,6 +39,12 @@ MISS_STATES = {"MISS", "BYPASS", "EXPIRED"}
 
 _STATUS_RE = re.compile(r"cache=([A-Za-z]*)")
 
+# 从日志行里取 HTTP 状态码。
+# 只认「引号后紧跟两个数字」这一处 —— 那是 `"$request" $status $body_bytes_sent`，
+# 而日志里被引号包起来的只有 request / referer / user_agent 三个字段，
+# 其中只有 request 后面跟数字。search 取第一个匹配，正好是状态码。
+_STATUS_CODE_RE = re.compile(r'"\s+(\d{3})\s+\d+')
+
 # 单次统计最多回看的行数 —— 日志可能很大，只关心近期表现
 DEFAULT_TAIL = 20000
 
@@ -52,10 +58,22 @@ def _tail_lines(path, limit):
 def parse_log_hitrate(path, tail=DEFAULT_TAIL):
     """统计单个日志文件的命中/未命中数。
 
-    无 `cache=` 标记的行（未走 proxy_cache 的请求）不计入任何一方，
-    但要单独返回，让界面能说明「这些请求不适用缓存」而不是算作未命中。
+    四类，互不重叠：
+
+      hit      由缓存提供的响应（HIT / STALE / UPDATING / REVALIDATED）
+      miss     真的回源取了内容回来
+      failed   4xx / 5xx —— **不进命中率的分母**，但单独报出来
+      uncached 未启用 proxy_cache 的请求（`cache=` 为空）
+
+    `failed` 为什么要单列而不是直接丢掉：404 不代表「缓存没起作用」——
+    那个东西本来就不存在，缓存无从提供，算作未命中就是让指标回答错的问题
+    （实测 .19 上 openEuler 的 metalink 接口 404 每小时刷 168 次，
+    把 system 类命中率从 ~61% 压到 31.7%）。但**只排除不显示**又会走到另一个
+    极端：上游整体 404 这种真故障会被藏起来，指标一片大好而客户端全在报错 ——
+    那正是本项目最要防的静默失效。所以：不进分母，但必须看得见。
     """
-    result = {"hit": 0, "miss": 0, "uncached": 0, "total": 0, "rate": None}
+    result = {"hit": 0, "miss": 0, "failed": 0, "uncached": 0,
+              "total": 0, "rate": None}
     if not os.path.isfile(path):
         return result
 
@@ -73,6 +91,12 @@ def parse_log_hitrate(path, tail=DEFAULT_TAIL):
             # `cache=` 为空：该 location 未启用 proxy_cache
             result["uncached"] += 1
             continue
+
+        cm = _STATUS_CODE_RE.search(line)
+        if cm and int(cm.group(1)) >= 400:
+            result["failed"] += 1
+            continue
+
         if state in HIT_STATES:
             result["hit"] += 1
         elif state in MISS_STATES:
@@ -92,10 +116,11 @@ def all_hitrate(log_dir):
     """汇总各类缓存的命中率。"""
     rows = []
     for t, files in LOG_MAP.items():
-        agg = {"hit": 0, "miss": 0, "uncached": 0, "total": 0, "rate": None}
+        agg = {"hit": 0, "miss": 0, "failed": 0, "uncached": 0,
+               "total": 0, "rate": None}
         for name in files:
             r = parse_log_hitrate(os.path.join(log_dir, name))
-            for k in ("hit", "miss", "uncached", "total"):
+            for k in ("hit", "miss", "failed", "uncached", "total"):
                 agg[k] += r[k]
         judged = agg["hit"] + agg["miss"]
         agg["total"] = judged
@@ -105,7 +130,7 @@ def all_hitrate(log_dir):
 
     for t in BACKEND_CACHED:
         rows.append({
-            "type": t, "hit": 0, "miss": 0, "uncached": 0,
+            "type": t, "hit": 0, "miss": 0, "failed": 0, "uncached": 0,
             "total": 0, "rate": None, "backend_cached": True,
         })
     return rows

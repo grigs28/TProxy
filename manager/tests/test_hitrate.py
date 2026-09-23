@@ -55,6 +55,76 @@ def test_empty_status_counts_as_uncached_not_miss():
         assert r["rate"] == 100.0, "未启用缓存的请求不应拉低命中率"
 
 
+def _write_status(d, name, pairs):
+    """按 (状态码, cache状态) 写日志行。"""
+    p = os.path.join(d, name)
+    with open(p, "w") as f:
+        for code, s in pairs:
+            f.write(LINE.format(s).replace(" 200 696 ", f" {code} 696 "))
+    return p
+
+
+# ---------- 4xx/5xx 不计入命中率 ----------
+
+def test_error_responses_excluded_from_rate():
+    """404 不该进命中率的分母。
+
+    404 不等于「缓存没起作用」—— 那个东西本来就不存在，缓存无从提供。
+    把它算作未命中，指标就在回答一个错的问题。
+    实测：.19 上 openEuler 的 metalink 接口 404 每小时刷 168 次，
+    把 system 类的命中率从 ~61% 拉到 31.7%。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        p = _write_status(d, "a.log", [(200, "HIT"), (200, "MISS"),
+                                       (404, "MISS"), (404, "MISS")])
+        r = parse_log_hitrate(p)
+        assert r["hit"] == 1
+        assert r["miss"] == 1
+        assert r["failed"] == 2
+        assert r["rate"] == 50.0, f"404 混进了分母: {r}"
+
+
+def test_errors_stay_visible_not_silently_dropped():
+    """错误必须仍然单独报出来。
+
+    只是排除、却不显示，等于把「上游全 404」这种真故障藏起来 ——
+    那正是本项目最要防的静默失效：指标很好看，客户端却在报错。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        p = _write_status(d, "a.log", [(404, "MISS")] * 5)
+        r = parse_log_hitrate(p)
+        assert r["failed"] == 5, "错误请求被悄悄丢掉了"
+        assert r["rate"] is None, "全错时没有可判定的请求，命中率应为空"
+
+
+def test_server_errors_also_excluded():
+    with tempfile.TemporaryDirectory() as d:
+        p = _write_status(d, "a.log", [(500, "MISS"), (502, "MISS"), (200, "HIT")])
+        r = parse_log_hitrate(p)
+        assert r["failed"] == 2
+        assert r["rate"] == 100.0
+
+
+def test_redirects_count_normally():
+    """3xx 是仓库的正常重定向（openEuler 的元数据就 302 到 CDN），
+    不是错误 —— 必须照常计入命中率。"""
+    with tempfile.TemporaryDirectory() as d:
+        p = _write_status(d, "a.log", [(302, "HIT"), (302, "MISS")])
+        r = parse_log_hitrate(p)
+        assert r["failed"] == 0
+        assert r["rate"] == 50.0
+
+
+def test_all_hitrate_aggregates_failed_across_files():
+    with tempfile.TemporaryDirectory() as d:
+        _write_status(d, "os-repo.log", [(404, "MISS"), (200, "HIT")])
+        _write_status(d, "os-repo-ssl.log", [(404, "MISS"), (200, "HIT")])
+        rows = {r["type"]: r for r in all_hitrate(d)}
+        assert rows["os"]["failed"] == 2
+        assert rows["os"]["hit"] == 2
+        assert rows["os"]["rate"] == 100.0
+
+
 def test_lines_without_marker_ignored():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "a.log")

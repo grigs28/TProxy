@@ -116,8 +116,17 @@ function renderHitrate(rows) {
 
   const table = document.createElement("table");
   const thead = document.createElement("thead");
+  // 命中率的分母只算「有内容可提供的请求」：4xx/5xx 单列一栏、不进分母
+  // （那个东西本来就不存在，算不上缓存没起作用），但必须看得见 ——
+  // 只排除不显示会把「上游整体 404」这种真故障藏起来。
   thead.innerHTML =
-    "<tr><th>类型</th><th>命中率</th><th>命中</th><th>回源</th><th>不适用</th></tr>";
+    "<tr>" +
+    '<th title="由缓存提供的响应占「有内容可提供的请求」的比例">类型</th>' +
+    '<th title="分母不含 4xx/5xx —— 那些请求本来就没有内容可提供">命中率</th>' +
+    "<th>命中</th><th>回源</th>" +
+    '<th title="4xx/5xx。不计入命中率，但持续出现说明上游或配置有问题">错误</th>' +
+    '<th title="该路径未启用 proxy_cache（如 registry / git 由后端自缓存）">不适用</th>' +
+    "</tr>";
   table.appendChild(thead);
 
   const tb = document.createElement("tbody");
@@ -137,7 +146,7 @@ function renderHitrate(rows) {
       td2.textContent = "后端自缓存";
       td2.title = "该类型的缓存由 registry:2 / gitcache 各自管理，nginx 层不参与";
       tr.append(td1, td2);
-      for (let i = 0; i < 3; i++) tr.appendChild(document.createElement("td"));
+      for (let i = 0; i < 4; i++) tr.appendChild(document.createElement("td"));
       tb.appendChild(tr);
       continue;
     }
@@ -158,11 +167,22 @@ function renderHitrate(rows) {
       td.textContent = v;
       return td;
     };
+    // 错误数：平时安静，一旦非零就变色 —— 它不进分母，但也不该被忽略
+    const failed = r.failed || 0;
+    const tdF = document.createElement("td");
+    tdF.className = "mono " + (failed > 0 ? "bad" : "muted");
+    tdF.textContent = failed;
+    if (failed > 0) {
+      tdF.title = "4xx/5xx。不计入命中率（那些请求本来就没有内容可提供），" +
+                  "但持续出现说明上游或配置有问题";
+    }
+
     tr.append(
       td1,
       td2,
       mk(r.hit),
       mk(r.miss),
+      tdF,
       mk(r.uncached || 0)
     );
     tb.appendChild(tr);
