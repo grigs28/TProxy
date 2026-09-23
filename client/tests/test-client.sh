@@ -19,13 +19,33 @@ for d in repo.openeuler.org registry-1.docker.io pypi.org registry.npmjs.org rep
   fi
 done
 
-echo "== 公网兜底：未劫持域名应能正常解析 =="
-# 这条验证「.18 之外还有可用的 DNS」——若失败，说明 .18 挂掉时本机会断网
+echo "== 公网兜底：未劫持域名应能通过代理解析 =="
+# 注意：这只验证「代理能转发未劫持域名」，不等于验证了兜底。
 r=$($DIG +short www.baidu.com 2>/dev/null | grep -E '^[0-9]' | head -1)
 if [[ -n "$r" ]]; then
-  echo "  ✅ 兜底正常 ($r)"
+  echo "  ✅ 经代理解析正常 ($r)"
 else
-  echo "  ❌ 兜底失败 —— .18 不可用时可能断网"
+  echo "  ❌ 经代理解析失败"
+  fail=1
+fi
+
+echo "== 公网兜底：备用 DNS 必须独立可用 =="
+# 这才是「代理宕机时能否上网」的真正验证 ——
+# 必须直查备用 DNS，绕开位于 resolv.conf 首位的代理。
+# 若此处失败，代理一旦不可用，客户端将无法解析任何域名。
+backup_ok=0
+for s in 223.5.5.5 119.29.29.29; do
+  b=$($DIG "@$s" +short www.baidu.com 2>/dev/null | grep -E '^[0-9]' | head -1)
+  if [[ -n "$b" ]]; then
+    echo "  ✅ $s 可用 ($b)"
+    backup_ok=1
+    break
+  else
+    echo "  ⚠️  $s 无响应"
+  fi
+done
+if [[ $backup_ok -eq 0 ]]; then
+  echo "  ❌ 所有备用 DNS 均不可达 —— 代理宕机时本机将断网"
   fail=1
 fi
 

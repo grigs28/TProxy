@@ -60,52 +60,105 @@ install_docker_ca() {
 # /opt/conda3/bin/curl 会使用 /opt/conda3/ssl/cacert.pem，
 # 导致「系统装了根 CA、conda 的 curl 仍报 unknown CA」。
 # 表现极具迷惑性：同一台机器上 /usr/bin/curl 正常，conda curl 失败。
+# 标记行：回滚时据此精确删除追加内容，不误伤用户原有的证书
+_RUNTIME_MARK="# TProxy Root CA"
+
+_runtime_candidates() {
+  # 必须同时扫描 /home/* —— 脚本以 root 运行，$HOME 是 /root，
+  # 普通用户安装的 miniconda 不会被 $HOME 通配匹配到
+  local pats=(
+    /opt/conda*/ssl/cacert.pem
+    /opt/miniconda*/ssl/cacert.pem
+    /opt/anaconda*/ssl/cacert.pem
+    /home/*/miniconda*/ssl/cacert.pem
+    /home/*/anaconda*/ssl/cacert.pem
+    /root/miniconda*/ssl/cacert.pem
+    /root/anaconda*/ssl/cacert.pem
+  )
+  local p
+  for p in "${pats[@]}"; do
+    [[ -f "$p" ]] && printf '%s\n' "$p"
+  done
+}
+
 install_runtime_ca() {
   local cert="$1"
   local found=0
-  local candidates=()
-  for pat in /opt/conda*/ssl/cacert.pem /opt/miniconda*/ssl/cacert.pem \
-             /opt/anaconda*/ssl/cacert.pem "$HOME"/miniconda*/ssl/cacert.pem \
-             "$HOME"/anaconda*/ssl/cacert.pem; do
-    # 未匹配的 glob 会原样返回，故需 -f 判断
-    [[ -f "$pat" ]] && candidates+=("$pat")
-  done
-
-  if [[ ${#candidates[@]} -eq 0 ]]; then
-    echo "未发现自带 CA bundle 的运行时，跳过"
-    return 0
-  fi
-
-  for f in "${candidates[@]}"; do
-    if grep -qF "TProxy Root CA" "$f" 2>/dev/null; then
+  local f
+  while read -r f; do
+    [[ -z "$f" ]] && continue
+    if grep -qF "$_RUNTIME_MARK" "$f" 2>/dev/null; then
       echo "   $f 已含 TProxy CA，跳过"
     else
       {
-        printf '\n# TProxy Root CA\n'
+        printf '\n%s\n' "$_RUNTIME_MARK"
         cat "$cert"
       } >> "$f"
       echo "   已追加到 $f"
     fi
     found=1
-  done
-  [[ $found -eq 1 ]] && echo "⚠️  自带 CA bundle 的工具（如 conda 的 curl/python）现已信任本代理"
+  done < <(_runtime_candidates)
+
+  [[ $found -eq 0 ]] && echo "未发现自带 CA bundle 的运行时，跳过"
+  return 0
+}
+
+remove_runtime_ca() {
+  local f
+  while read -r f; do
+    [[ -z "$f" ]] && continue
+    grep -qF "$_RUNTIME_MARK" "$f" 2>/dev/null || continue
+    # 删掉「标记行及其后的证书块」：标记行之后到文件末尾即为追加内容
+    # （追加时总是在末尾，且证书 PEM 内不含我们的标记行）
+    local tmp
+    tmp=$(mktemp)
+    awk -v mark="$_RUNTIME_MARK" '
+      index($0, mark) { exit }   # 遇到标记即停止输出，之后的全是追加内容
+      { print }
+    ' "$f" > "$tmp" && mv "$tmp" "$f"
+    echo "   已从 $f 移除 TProxy CA"
+    # 去掉可能残留的尾部空行
+    sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$f" 2>/dev/null || true
+  done < <(_runtime_candidates)
   return 0
 }
 
 install_java_ca() {
   local cert="$1"
-  local ks=""
-  # 优先 JAVA_HOME，其次在常见路径下找
+  local keystores=()
+
+  # 遍历【所有】JDK —— 只装第一个会让其余 JDK 上的 Maven/Gradle 构建
+  # 仍然报证书错误，而多 JDK 在开发机上很常见
   if [[ -n "${JAVA_HOME:-}" && -f "$JAVA_HOME/lib/security/cacerts" ]]; then
-    ks="$JAVA_HOME/lib/security/cacerts"
-  else
-    ks=$(find /usr/lib/jvm -name cacerts -path '*security*' 2>/dev/null | head -1)
+    keystores+=("$JAVA_HOME/lib/security/cacerts")
   fi
-  if [[ -z "$ks" ]]; then
+  local found
+  while read -r found; do
+    [[ -z "$found" ]] && continue
+    # 去重（JAVA_HOME 可能与 /usr/lib/jvm 下的是同一个）
+    local dup=0 k
+    for k in "${keystores[@]:-}"; do
+      [[ "$k" == "$found" ]] && dup=1 && break
+    done
+    [[ $dup -eq 0 ]] && keystores+=("$found")
+  done < <(find /usr/lib/jvm /opt -name cacerts -path '*security*' 2>/dev/null)
+
+  if [[ ${#keystores[@]} -eq 0 ]]; then
     echo "未找到 JDK cacerts，跳过"
     return 0
   fi
-  keytool -importcert -noprompt -trustcacerts \
-    -alias tproxy-ca -file "$cert" -keystore "$ks" -storepass changeit 2>&1 | tail -2
-  echo "Java cacerts 已更新: $ks"
+
+  local ks
+  for ks in "${keystores[@]}"; do
+    # 先删再导入：alias 已存在时 keytool 会拒绝导入，
+    # 那会让 CA 轮换后重跑脚本时 Java 库永远停留在旧证书
+    keytool -delete -alias tproxy-ca -keystore "$ks" -storepass changeit >/dev/null 2>&1 || true
+    if keytool -importcert -noprompt -trustcacerts \
+        -alias tproxy-ca -file "$cert" -keystore "$ks" -storepass changeit >/dev/null 2>&1; then
+      echo "   ✅ $ks"
+    else
+      echo "   ⚠️  $ks 导入失败（可能无写权限）"
+    fi
+  done
+  echo "Java cacerts 已更新（${#keystores[@]} 个）"
 }

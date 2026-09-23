@@ -37,7 +37,8 @@ echo "--- 2. 防火墙（最易漏的一项）---"
 if systemctl is-active --quiet firewalld 2>/dev/null; then
   if [[ $EUID -eq 0 ]]; then
     ports=$(firewall-cmd --list-ports 2>/dev/null || echo "")
-    for p in 443/tcp 80/tcp 53/udp; do
+    # 53/tcp 不能漏：dnsmasq 对超过 512 字节的响应会走 TCP
+    for p in 443/tcp 80/tcp 53/tcp 53/udp; do
       if grep -q "$p" <<<"$ports"; then
         ok "firewalld 已放行 $p"
       else

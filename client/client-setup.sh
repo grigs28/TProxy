@@ -7,8 +7,9 @@
 #   sudo ./client-setup.sh --server 192.168.0.18
 #   sudo ./client-setup.sh --rollback          # 回滚
 #
-# 脚本会修改：DNS 配置、系统信任库、Docker 证书目录、Java cacerts。
-# 所有改动均可通过 --rollback 撤销。
+# 脚本会修改：DNS 配置、系统信任库、Docker 证书目录、Java cacerts、运行时 CA bundle。
+# --rollback 可撤销 DNS / 系统信任库 / Docker 部分；
+# Java cacerts 与 systemd-resolved 的恢复需按回滚输出的提示手工处理。
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -20,20 +21,17 @@ source "$DIR/lib/dns.sh"
 source "$DIR/lib/ca.sh"
 
 TPROXY_SERVER="${TPROXY_SERVER:-192.168.0.18}"
+# 导出：让其成为子进程（tests/test-client.sh）可见的环境变量，
+# 否则自检仍按默认地址断言，用 --server 接入的机器会被误报为 CLIENT-FAIL
+export TPROXY_SERVER
 CA_FILE=""
 
 # ---- 回滚（必须在参数解析之前定义，--rollback 会立即调用它）----
 do_rollback() {
   echo "=== 回滚 TProxy 客户端配置 ==="
 
-  local latest
-  latest=$(ls -t /var/backups/tproxy-client/resolv.conf.* 2>/dev/null | head -1 || true)
-  if [[ -n "$latest" ]]; then
-    cp -a "$latest" /etc/resolv.conf
-    echo "已恢复 DNS 配置: $latest"
-  else
-    echo "⚠️  未找到 DNS 备份，请手动检查 /etc/resolv.conf"
-  fi
+  # 恢复【首次】备份的原始配置（不是最近一次）
+  restore_dns_config
 
   case "$(detect_distro)" in
     ubuntu)
@@ -47,13 +45,26 @@ do_rollback() {
   esac
   echo "已从系统信任库移除 CA"
 
-  rm -f /etc/docker/certs.d/*/ca.crt 2>/dev/null || true
-  echo "已移除 Docker 证书（需重启 docker 生效）"
+  # 只删我们安装的那些域名 —— 不能通配删除整个 certs.d，
+  # 那会连带删掉用户为自己的私有 registry 配置的 CA（不可恢复）
+  if [[ -d /etc/docker/certs.d ]]; then
+    while read -r d; do
+      [[ -z "$d" ]] && continue
+      rm -f "/etc/docker/certs.d/$d/ca.crt" 2>/dev/null || true
+      rmdir "/etc/docker/certs.d/$d" 2>/dev/null || true
+    done < <(docker_ca_domains)
+    echo "已移除 TProxy 的 Docker 证书（未触碰其他 CA；需重启 docker 生效）"
+  fi
+
+  # 运行时 CA bundle：按标记块精确删除追加内容
+  remove_runtime_ca
 
   echo
   echo "⚠️  以下需手动处理："
   echo "   · Java cacerts：keytool -delete -alias tproxy-ca -keystore <JDK>/lib/security/cacerts"
   echo "   · systemd-resolved 若原为启用状态：systemctl enable --now systemd-resolved"
+  echo "   · 若用 NetworkManager，连接配置里的 DNS 需手工改回："
+  echo "     nmcli con mod <连接> ipv4.ignore-auto-dns no && nmcli con up <连接>"
 }
 
 while [[ $# -gt 0 ]]; do
