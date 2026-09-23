@@ -12,6 +12,28 @@
 
 ---
 
+## [0.3.9] - 2026-09-24
+
+### 新增
+- 客户端脚本**修复别的脚本留下的、会让机器不可用的配置**（`tp.client.sh` → 0.1.2）。
+  PVE 机器（`.91-.99` / `.140-.144`，共 14 台，全是 Debian 13）跑过
+  `ve/ve.client.sh`，留下三类问题，**都不会当场报错**，只在之后以
+  「apt update 失败」「git 连不上」的形式暴露：
+  - `/etc/apt/sources.list` 指向 `http://<cacheIP>/repository/debian-proxy/`
+    —— 旧 Nexus 路径，架构重建时已下线（实测 `.18` 与 `.36` **都是 000**）
+  - 把**已经正确的** PVE 9 源（deb822 + trixie）挪进 backup，
+    换成旧单行 `.list` + `bookworm` codename —— 而 PVE 9 基于 Debian 13 (trixie)
+  - `/etc/hosts` 覆盖令劫持失效（由 hosts 检查负责）
+- 新增 git 全局 `url.*.insteadOf` 重定向的检查与移除 ——
+  把 `github.com` 重定向到别处，会让 git 流量绕过 TProxy 缓存
+- 发行版判断（`is_debian_like`），apt 相关的检查只对 Debian 系执行
+
+### 修复
+- PVE 源按**官方 deb822 格式**重建（`proxmox.sources` / `ceph.sources`，
+  `Suites: trixie`，`Signed-By: proxmox-archive-keyring.gpg`）。
+  依据 Proxmox 官方 Package Repositories 文档：PVE 9 用 `.sources` 格式，
+  旧的 `/etc/apt/sources.list` 应清空
+
 ## [0.3.8] - 2026-09-24
 
 ### 变更
