@@ -54,15 +54,20 @@ def parse_nginx_servers(confd_dir):
         with open(os.path.join(confd_dir, name), encoding="utf-8") as f:
             text = _strip_comments(f.read())
 
+        # 要求 server_name 前有边界：否则 `proxy_ssl_server_name on;` 里的
+        # 子串会被命中，把 "on" 混进域名列表（本项目每个含该指令的 conf 都会触发）
         names = []
-        for m in re.finditer(r"server_name\s+([^;]+);", text):
+        for m in re.finditer(r"(?:^|[\s;{}])server_name\s+([^;]+);", text, re.M):
             names.extend(m.group(1).split())
         if not names:
             continue
 
+        # `proxy_cache off;` 不是缓存区名 —— 它表示该路径不走 nginx 缓存
+        # （如 git/registry 由各自后端自行缓存）。原样显示会让人误以为
+        # 存在一个叫 "off" 的 zone。
         cache = None
         m = re.search(r"proxy_cache\s+([^;\s]+);", text)
-        if m:
+        if m and m.group(1) != "off":
             cache = m.group(1)
 
         servers.append({

@@ -66,6 +66,30 @@ def test_parse_nginx_extracts_names_and_cache_zone():
         assert s["cache_zone"] == "py_cache"
 
 
+def test_server_name_ignores_proxy_ssl_server_name():
+    """`proxy_ssl_server_name on;` 里的子串不得被当成 server_name 指令。
+
+    本项目的 git/java/nodejs/python 四个 conf 都含该指令，
+    旧正则会把 "on" 混进域名列表。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "git.conf"), "w") as f:
+            f.write(
+                "server {\n"
+                "  listen 443 ssl;\n"
+                "  server_name github.com gitlab.com;\n"
+                "  proxy_ssl_server_name on;\n"
+                "  proxy_cache off;\n"
+                "}\n"
+            )
+        servers = parse_nginx_servers(d)
+        assert len(servers) == 1
+        assert servers[0]["server_name"] == ["github.com", "gitlab.com"], \
+            f"域名列表混入了假域名: {servers[0]['server_name']}"
+        assert servers[0]["cache_zone"] is None, \
+            f"`proxy_cache off` 不应被当作缓存区名，实际: {servers[0]['cache_zone']}"
+
+
 def test_parse_nginx_ignores_commented_lines():
     """注释里的指令不得被解析 —— 否则界面会显示不存在的配置。"""
     with tempfile.TemporaryDirectory() as d:
