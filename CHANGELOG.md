@@ -12,6 +12,28 @@
 
 ---
 
+## [0.3.8] - 2026-09-24
+
+### 变更
+- Docker 配置改为**标准化**（`tp.client.sh` → 0.1.1）：
+  保留 `data-root`，其余键替换成标准值
+  （`log-driver` / `log-opts` 50m×5 / `exec-opts` cgroupdriver /
+  `storage-driver` overlay2），并移除 `registry-mirrors`
+- **`storage-driver` 是条件保留的**：它与 `data-root` 同类 ——
+  改了会让 Docker 去别处找镜像层，现有镜像与容器同样会「消失」。
+  故本机已是别的驱动时保留原值并告警，不强行改成 overlay2
+- 被替换掉的非标准键**逐个列出来**再动手，配置无声消失最难查
+- 已是标准时不重写文件（先判断）—— 避免无谓 churn
+
+### 说明
+- 实测 7 个常见国内镜像站只有 3 个可用（`docker.1ms.run`、
+  `docker.m.daocloud.io`、`docker.imgdb.de`）；
+  `docker.1panel.live` 403、`mirror.ccs.tencentyun.com` 无解析（腾讯云内网）、
+  `hub-mirror.c.163.com` 无 A 记录（已停用）、`192.168.0.36` 未跑 registry
+- ⚠️ `bip` / `mtu` / `default-address-pools` 这类键在某些机器上是有意配的
+  （避开网段冲突等），按「其余替换成标准」会被移除 —— 会逐个报告，
+  但需要评估是否也该保留
+
 ## [0.3.7] - 2026-09-24
 
 ### 新增

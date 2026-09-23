@@ -61,6 +61,134 @@ docker_conf_valid() {
   python3 -c "import json,sys; json.load(open(sys.argv[1],encoding='utf-8'))" "$f" 2>/dev/null
 }
 
+# 标准 daemon.json 的键值（data-root 除外 —— 它只保留、不设定）
+DOCKER_STD_LOG_DRIVER="json-file"
+DOCKER_STD_LOG_OPTS='{"max-size": "50m", "max-file": "5"}'
+DOCKER_STD_EXEC_OPTS='["native.cgroupdriver=systemd"]'
+DOCKER_STD_STORAGE_DRIVER="overlay2"
+
+# 标准之外、且不是 data-root 的键 —— 标准化时会被替换掉。
+# 单独列出来是为了**在被丢弃前报给用户**：无声消失的配置最难查。
+docker_conf_extra_keys() {
+  local f="${1:-$DOCKER_DAEMON_JSON}"
+  [[ -f "$f" ]] || return 0
+  python3 - "$f" <<'PY' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+keep = {"data-root", "registry-mirrors",
+        "log-driver", "log-opts", "exec-opts", "storage-driver"}
+for k in d:
+    if k not in keep:
+        print(k)
+PY
+}
+
+# 读出 storage-driver 的现值。只读。
+docker_conf_storage_driver() {
+  local f="${1:-$DOCKER_DAEMON_JSON}"
+  [[ -f "$f" ]] || return 0
+  python3 - "$f" <<'PY' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+v = d.get("storage-driver")
+if isinstance(v, str):
+    print(v)
+PY
+}
+
+# 现在是否已经就是标准配置（data-root 与异值 storage-driver 不计）。
+# 用于「先判断」—— 已经是标准就不该重写文件，那是无谓的 churn。
+docker_conf_is_standard() {
+  local f="${1:-$DOCKER_DAEMON_JSON}"
+  [[ -f "$f" ]] || return 0
+  docker_conf_valid "$f" || return 1
+  [[ -z "$(docker_conf_mirrors "$f")" ]] || return 1
+  [[ -z "$(docker_conf_extra_keys "$f")" ]] || return 1
+
+  local drv
+  drv=$(docker_conf_storage_driver "$f")
+  [[ -z "$drv" || "$drv" == "$DOCKER_STD_STORAGE_DRIVER" ]] || return 1
+
+  STDD_LOG="$DOCKER_STD_LOG_DRIVER" \
+  STDD_LOGO="$DOCKER_STD_LOG_OPTS" \
+  STDD_EXECO="$DOCKER_STD_EXEC_OPTS" \
+  python3 - "$f" <<'PY' 2>/dev/null
+import json, os, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+ok = (d.get("log-driver") == os.environ["STDD_LOG"]
+      and d.get("log-opts") == json.loads(os.environ["STDD_LOGO"])
+      and d.get("exec-opts") == json.loads(os.environ["STDD_EXECO"]))
+sys.exit(0 if ok else 1)
+PY
+}
+
+# 标准化：保留 data-root，其余键写成标准值。
+#
+# ⚠️ storage-driver 是**条件保留**的：它与 data-root 同类 ——
+#    改了会让 Docker 去别的地方找镜像层，现有镜像与容器会全部「消失」。
+#    所以本机已是别的驱动时，保留原值不改（由调用方告警）。
+#
+# **先判断**：文件不存在或 JSON 非法时不动手。
+# **宁可不改也不能写坏**：写坏 daemon.json 会让 Docker 起不来。
+docker_conf_normalize() {
+  local f="${1:-$DOCKER_DAEMON_JSON}"
+  [[ -f "$f" ]] || return 0
+  docker_conf_valid "$f" || return 3
+  command -v python3 >/dev/null 2>&1 || return 2
+
+  local tmp rc
+  tmp=$(mktemp) || return 1
+
+  STDD_LOG="$DOCKER_STD_LOG_DRIVER" \
+  STDD_LOGO="$DOCKER_STD_LOG_OPTS" \
+  STDD_EXECO="$DOCKER_STD_EXEC_OPTS" \
+  STDD_DRV="$DOCKER_STD_STORAGE_DRIVER" \
+  python3 - "$f" >"$tmp" 2>/dev/null <<'PY'
+import json, os, sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    old = json.load(fh)
+
+new = {}
+# data-root：只保留，不设定 —— 改了会让现有容器与镜像「消失」
+if isinstance(old.get("data-root"), str):
+    new["data-root"] = old["data-root"]
+
+new["log-driver"] = os.environ["STDD_LOG"]
+new["log-opts"] = json.loads(os.environ["STDD_LOGO"])
+new["exec-opts"] = json.loads(os.environ["STDD_EXECO"])
+
+# storage-driver 同理：本机已是别的驱动就保留，强行改会让镜像「消失」
+cur = old.get("storage-driver")
+drv = os.environ["STDD_DRV"]
+new["storage-driver"] = cur if (isinstance(cur, str) and cur != drv) else drv
+
+print(json.dumps(new, indent=2, ensure_ascii=False))
+PY
+  rc=$?
+  if [[ $rc -ne 0 ]]; then
+    rm -f "$tmp"; return 1
+  fi
+  if ! python3 -c "import json,sys; json.load(open(sys.argv[1],encoding='utf-8'))" "$tmp" 2>/dev/null; then
+    rm -f "$tmp"; return 1
+  fi
+
+  local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/daemon.json.original"
+  if [[ ! -f "$bk" ]]; then
+    mkdir -p "$(dirname "$bk")" 2>/dev/null || true
+    cp -a "$f" "$bk" 2>/dev/null || true
+  fi
+  cat "$tmp" > "$f" || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+  return 0
+}
+
 # 去掉 registry-mirrors，其余键原样保留。
 #
 # **先判断**：没有该项时一个字节都不动。
