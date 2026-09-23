@@ -67,12 +67,32 @@ do_rollback() {
   echo "     nmcli con mod <连接> ipv4.ignore-auto-dns no && nmcli con up <连接>"
 }
 
+# 帮助只列「能打什么、打了会怎样」。
+# 原先用写死的行号 sed -n '2,12p' 打印文件头 —— 头部注释一增删，
+# 帮助就会开始打印代码，把 "}" 之类漏给用户。
+show_help() {
+  cat <<EOF
+client-setup.sh —— 把本机接入 TProxy 透明缓存
+
+用法: sudo ./client-setup.sh [选项]
+
+  （无选项）         完整接入：配置 DNS + 安装根证书
+  --ca <文件>        用本地 CA 文件（服务端不可达时）
+  --server <IP>      指定 TProxy 服务器（默认 ${TPROXY_SERVER}）
+  --rollback         回滚
+  -h, --help         显示本帮助
+
+会修改：DNS 配置、系统信任库、Docker 证书目录、Java cacerts、运行时 CA bundle。
+--rollback 只撤销 DNS / 系统信任库 / Docker 三部分，其余按回滚输出的提示手工处理。
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ca)       CA_FILE="${2:-}"; shift 2 ;;
     --server)   TPROXY_SERVER="${2:-}"; shift 2 ;;
     --rollback) do_rollback; exit 0 ;;
-    -h|--help)  sed -n '2,12p' "$0"; exit 0 ;;
+    -h|--help)  show_help; exit 0 ;;
     *)          echo "未知参数: $1（用 --help 查看用法）"; exit 1 ;;
   esac
 done
