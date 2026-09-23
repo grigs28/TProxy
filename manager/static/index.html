@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TProxy 缓存管理</title>
+<style>
+  /* ---- 设计令牌 ----
+     配色取自主题本身：这是「劫持与流向」的世界，
+     深蓝灰底而非纯黑（长时间盯屏不刺眼），青色作交互色，
+     三个状态色承担全部语义。 */
+  :root {
+    --bg:      #0f1419;
+    --surface: #161c24;
+    --raise:   #1d252f;
+    --border:  #232b36;
+    --text:    #d8dee9;
+    --muted:   #7b8794;
+    --faint:   #4a5561;
+    --accent:  #4cc9f0;
+    --ok:      #4ade80;
+    --warn:    #fbbf24;
+    --bad:     #f87171;
+
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+
+    --gap: 20px;
+    --radius: 6px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 16px 64px;
+  }
+
+  /* ---- 顶栏 ---- */
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 28px 0 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    margin: 0;
+  }
+  h1 .sub {
+    color: var(--faint);
+    font-weight: 400;
+    margin-left: 8px;
+    font-size: 13px;
+  }
+  .host {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: 1px;
+    background: var(--faint);
+  }
+  .dot.ok   { background: var(--ok);   box-shadow: 0 0 6px var(--ok); }
+  .dot.bad  { background: var(--bad);  box-shadow: 0 0 6px var(--bad); }
+
+  /* ---- 区块 ---- */
+  section { margin-bottom: 36px; }
+  h2 {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h2 .count {
+    font-family: var(--mono);
+    font-weight: 400;
+    letter-spacing: 0;
+    color: var(--faint);
+    text-transform: none;
+  }
+  h2::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* ---- 缓存填充条：本页的签名元素 ----
+     已启用 = 实心填充；未启用 = 虚线空槽。
+     「哪类缓存没在工作」不需要读文字，扫一眼槽的形状即可。 */
+  .cache-row {
+    display: grid;
+    grid-template-columns: 96px 1fr 104px 74px;
+    align-items: center;
+    gap: 14px;
+    padding: 7px 0;
+  }
+  .cache-name {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .bar {
+    position: relative;
+    height: 8px;
+    background: var(--surface);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .bar > i {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width .4s ease;
+  }
+  /* 未启用：虚线空槽 —— 视觉上与「已启用但为空」明确区分 */
+  .bar.off {
+    background: repeating-linear-gradient(
+      90deg, var(--border) 0 4px, transparent 4px 8px);
+  }
+  .bar.off > i { display: none; }
+  .cache-size {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    text-align: right;
+  }
+  .cache-state { font-size: 12px; text-align: right; }
+  .cache-state.on  { color: var(--ok); }
+  .cache-state.off { color: var(--faint); }
+
+  /* ---- 表格 ---- */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th {
+    text-align: left;
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--faint);
+    padding: 0 12px 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 7px 12px 7px 0;
+    border-bottom: 1px solid rgba(35,43,54,.5);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-family: var(--mono); font-size: 12.5px; }
+  .arrow { color: var(--faint); padding: 0 6px; }
+  .muted { color: var(--muted); }
+  .warn  { color: var(--warn); }
+  .bad   { color: var(--bad); }
+
+  /* ---- 状态与空态 ---- */
+  .empty {
+    color: var(--faint);
+    font-size: 13px;
+    padding: 18px 0;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    text-align: center;
+  }
+  .loading { color: var(--faint); font-size: 13px; padding: 18px 0; }
+
+  .cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: var(--raise);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--muted);
+  }
+
+  a { color: var(--accent); }
+
+  @media (max-width: 720px) {
+    .cols { grid-template-columns: 1fr; gap: 36px; }
+    .cache-row { grid-template-columns: 78px 1fr 84px; }
+    .cache-state { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>TProxy<span class="sub">缓存管理</span></h1>
+    <div class="host">
+      <span class="dot" id="health-dot"></span><span id="health-text">连接中…</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>缓存 <span class="count" id="cache-count"></span></h2>
+    <div id="cache-list"><div class="loading">读取中…</div></div>
+  </section>
+
+  <section>
+    <h2>劫持规则 <span class="count" id="rule-count"></span></h2>
+    <div id="rule-list"><div class="loading">读取中…</div></div>
+  </section>
+
+  <div class="cols">
+    <section>
+      <h2>证书 <span class="count" id="cert-count"></span></h2>
+      <div id="cert-list"><div class="loading">读取中…</div></div>
+    </section>
+
+    <section>
+      <h2>分流入口 <span class="count" id="server-count"></span></h2>
+      <div id="server-list"><div class="loading">读取中…</div></div>
+    </section>
+  </div>
+
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
