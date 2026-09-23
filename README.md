@@ -48,10 +48,15 @@ cd /mnt/HDD/TPoxy
 
 ```
 /opt/TProxy/
-├── doc/                      # 项目文档
-│   ├── API.md               # API 接口文档
-│   ├── DEPLOY.md            # 部署指南
-│   └── README.md            # 详细说明
+├── docs/                     # 项目文档
+│   ├── README.md            # 文档索引
+│   ├── architecture.md      # 生产环境架构
+│   ├── known-issues.md      # 已知问题
+│   ├── proxy-cache-research.md  # 代理缓存方案调研
+│   └── proxy-manager/       # 管理端文档
+│       ├── API.md           # API 接口文档
+│       ├── DEPLOY.md        # 部署指南
+│       └── README.md        # 详细说明
 ├── proxy-manager/           # Proxy Manager 管理控制台
 │   ├── main.py              # 主入口文件
 │   ├── backend/             # 后端模块
@@ -150,11 +155,19 @@ systemctl start proxy-manager
 
 ## 文档
 
-详细文档请查看 [doc/](doc/) 目录：
+详细文档请查看 [docs/](docs/) 目录：
 
-- [API 文档](doc/API.md) - RESTful API 接口说明
-- [部署指南](doc/DEPLOY.md) - 详细的部署和配置说明
-- [详细说明](doc/README.md) - 项目详细介绍
+**管理端**
+
+- [API 文档](docs/proxy-manager/API.md) - RESTful API 接口说明
+- [部署指南](docs/proxy-manager/DEPLOY.md) - 详细的部署和配置说明
+- [详细说明](docs/proxy-manager/README.md) - 项目详细介绍
+
+**运行环境**
+
+- [架构总览](docs/architecture.md) - 生产环境架构与容器清单
+- [已知问题](docs/known-issues.md) - 已知问题与排查结论
+- [方案调研](docs/proxy-cache-research.md) - 代理缓存替代方案调研
 
 ## 配置示例
 

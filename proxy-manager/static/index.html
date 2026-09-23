@@ -85,6 +85,7 @@
                     <button class="tab" :class="{ active: currentTab === 'config' }" @click="switchTab('config')">⚙️ 配置</button>
                     <button class="tab" :class="{ active: currentTab === 'dns' }" @click="switchTab('dns')">🌐 DNS</button>
                     <button class="tab" :class="{ active: currentTab === 'hosts' }" @click="switchTab('hosts')">📝 Hosts配置</button>
+                    <button class="tab" :class="{ active: currentTab === 'firewall' }" @click="switchTab('firewall')">🔥 防火墙</button>
                     <button class="tab" :class="{ active: currentTab === 'logs' }" @click="switchTab('logs')">📜 日志</button>
                 </div>
             </div>
@@ -153,6 +154,44 @@
                     </div>
 
                     <div class="card">
+                        <h3>🐳 Docker Registry</h3>
+                        <div class="status-card">
+                            <div class="status-icon" :class="registryStatusClass">
+                                {{ getStatusIcon(status.containers['docker-registry']?.status) }}
+                            </div>
+                            <div class="status-text">
+                                <div class="status-label">状态</div>
+                                <div class="status-value" :class="'status-' + registryStatusClass">
+                                    {{ getStatusText(status.containers['docker-registry']?.status) }}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <span class="badge badge-info">端口: 5000</span>
+                            <span class="badge badge-success">Docker 镜像缓存</span>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>📦 GitCache</h3>
+                        <div class="status-card">
+                            <div class="status-icon" :class="gitcacheStatusClass">
+                                {{ getStatusIcon(status.containers.gitcache?.status) }}
+                            </div>
+                            <div class="status-text">
+                                <div class="status-label">状态</div>
+                                <div class="status-value" :class="'status-' + gitcacheStatusClass">
+                                    {{ getStatusText(status.containers.gitcache?.status) }}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <span class="badge badge-info">端口: 5001</span>
+                            <span class="badge badge-success">Git 仓库缓存</span>
+                        </div>
+                    </div>
+
+                    <div class="card">
                         <h3>💾 缓存状态</h3>
                         <div class="status-card">
                             <div class="status-icon running">💿</div>
@@ -170,9 +209,12 @@
                             </span>
                         </div>
                         <div class="mt-2" v-if="status.cache?.total > 0">
-                            <span class="badge badge-info">
-                                HIT: {{ status.cache?.hits || 0 }} / MISS: {{ status.cache?.misses || 0 }}
-                            </span>
+                            <span class="badge badge-success">HIT: {{ status.cache?.hits || 0 }}</span>
+                            <span class="badge badge-warning">MISS: {{ status.cache?.misses || 0 }}</span>
+                            <span class="badge badge-info" v-if="status.cache?.bypass">BYPASS: {{ status.cache?.bypass }}</span>
+                        </div>
+                        <div class="mt-2" v-if="status.cache?.connect_requests">
+                            <span class="badge badge-secondary">HTTPS 隧道: {{ status.cache?.connect_requests }} (不可缓存)</span>
                         </div>
                         <div v-if="status.disk.available" class="mt-2 text-small text-muted">
                             可用空间: {{ status.disk.available }}
@@ -231,6 +273,61 @@
                             <span class="text-muted">更新时间:</span>
                             <strong>{{ formatTime(status.system.timestamp) }}</strong>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Recent Requests -->
+                <div class="card">
+                    <h2>📡 最近请求</h2>
+                    <div class="btn-group mb-3">
+                        <button class="btn btn-sm btn-secondary" @click="fetchRecentRequests(20)">🔄 刷新</button>
+                    </div>
+                    <div v-if="recentRequests.length === 0" class="text-muted text-center p-4">
+                        暂无请求数据
+                    </div>
+                    <div v-else class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                        <table class="table table-sm table-hover">
+                            <thead class="sticky-top bg-light">
+                                <tr>
+                                    <th>时间</th>
+                                    <th>方法</th>
+                                    <th>URI</th>
+                                    <th>状态</th>
+                                    <th>缓存</th>
+                                    <th>类型</th>
+                                    <th>耗时</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="(req, idx) in recentRequests" :key="idx"
+                                    :class="{ 'table-success': req.cache_status === 'HIT', 'table-warning': req.cache_status === 'MISS' }">
+                                    <td class="text-small">{{ formatRequestTime(req.time) }}</td>
+                                    <td>
+                                        <span class="badge" :class="req.method === 'CONNECT' ? 'badge-secondary' : 'badge-primary'">
+                                            {{ req.method }}
+                                        </span>
+                                    </td>
+                                    <td class="text-small text-truncate" style="max-width: 300px;" :title="req.uri">
+                                        {{ truncateUri(req.uri) }}
+                                    </td>
+                                    <td>
+                                        <span class="badge" :class="getStatusBadgeClass(req.status)">
+                                            {{ req.status }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="badge" :class="getCacheStatusBadgeClass(req.cache_status)">
+                                            {{ req.cache_status || '-' }}
+                                        </span>
+                                    </td>
+                                    <td class="text-small">{{ req.cache_type || '-' }}</td>
+                                    <td class="text-small">{{ req.request_time }}s</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="mt-2 text-small text-muted">
+                        <span v-if="recentRequestsCount > 0">显示最近 {{ recentRequestsCount }} 条请求</span>
                     </div>
                 </div>
             </div>
@@ -601,6 +698,148 @@ address=/docker.io/192.168.0.36
                             <span style="margin-left: 1rem;">GitHub: <strong>{{ hostsMasterStats.github }}</strong></span>
                             <span style="margin-left: 1rem;">其他: <strong>{{ hostsMasterStats.other }}</strong></span>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Firewall Tab -->
+            <div v-show="currentTab === 'firewall'">
+                <div class="card">
+                    <h2>🔥 防火墙管理</h2>
+
+                    <!-- Firewall Status -->
+                    <div class="grid-4" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 2rem;">
+                        <div class="card">
+                            <h3>🛡️ 防火墙状态</h3>
+                            <div class="status-card">
+                                <div class="status-icon" :class="firewallStatus.active ? 'running' : 'stopped'">
+                                    {{ firewallStatus.active ? '🟢' : '🔴' }}
+                                </div>
+                                <div class="status-text">
+                                    <div class="status-label">状态</div>
+                                    <div class="status-value" :class="'status-' + (firewallStatus.active ? 'running' : 'stopped')">
+                                        {{ firewallStatus.message }}
+                                    </div>
+                                </div>
+                            </div>
+                            <p class="text-small text-muted mt-2">
+                                已安装: {{ firewallStatus.installed ? '✓' : '✗' }}
+                            </p>
+                        </div>
+
+                        <div class="card">
+                            <h3>📊 端口统计</h3>
+                            <div class="status-card">
+                                <div class="status-icon running">🔌</div>
+                                <div class="status-text">
+                                    <div class="status-label">已开放</div>
+                                    <div class="status-value">{{ firewallPorts.filter(p => p.is_open).length }} / {{ firewallPorts.length }}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <h3>🚨 未开放端口</h3>
+                            <div class="status-card">
+                                <div class="status-icon" :class="firewallPorts.filter(p => !p.is_open).length > 0 ? 'stopped' : 'running'">
+                                    {{ firewallPorts.filter(p => !p.is_open).length > 0 ? '⚠️' : '✓' }}
+                                </div>
+                                <div class="status-text">
+                                    <div class="status-label">需开放</div>
+                                    <div class="status-value">{{ firewallPorts.filter(p => !p.is_open).length }}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <h3>⚡ 快速操作</h3>
+                            <div class="btn-group" style="flex-direction: column; gap: 0.5rem;">
+                                <button class="btn btn-success" @click="firewallStart" :disabled="firewallStatus.active || !firewallStatus.installed">
+                                    ▶️ 启动防火墙
+                                </button>
+                                <button class="btn btn-danger" @click="firewallStop" :disabled="!firewallStatus.active">
+                                    ⏹️ 停止防火墙
+                                </button>
+                                <button class="btn btn-warning" @click="firewallRestart" :disabled="!firewallStatus.active">
+                                    🔄 重启防火墙
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Port Management -->
+                    <div class="card">
+                        <h3>🔌 TProxy 端口管理</h3>
+                        <p class="text-muted mb-3">
+                            以下端口是 TProxy 正常运行所必需的，请确保它们都已开放。
+                        </p>
+
+                        <table class="table" style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: #f5f5f5;">
+                                    <th style="padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border-color);">端口</th>
+                                    <th style="padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border-color);">协议</th>
+                                    <th style="padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border-color);">说明</th>
+                                    <th style="padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border-color);">状态</th>
+                                    <th style="padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border-color);">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="port in firewallPorts" :key="port.port" style="border-bottom: 1px solid var(--border-color);">
+                                    <td style="padding: 0.75rem;"><strong>{{ port.port }}</strong></td>
+                                    <td style="padding: 0.75rem;">{{ port.protocol }}</td>
+                                    <td style="padding: 0.75rem;">{{ port.description }}</td>
+                                    <td style="padding: 0.75rem;">
+                                        <span class="badge" :class="port.is_open ? 'badge-success' : 'badge-warning'">
+                                            {{ port.status }}
+                                        </span>
+                                    </td>
+                                    <td style="padding: 0.75rem;">
+                                        <button v-if="!port.is_open" class="btn btn-sm btn-success" @click="firewallOpenPort(port.port, port.protocol)" :disabled="!firewallStatus.active || !firewallStatus.installed">
+                                            🔓 开放
+                                        </button>
+                                        <button v-else class="btn btn-sm btn-danger" @click="firewallClosePort(port.port, port.protocol)" :disabled="!firewallStatus.active || !firewallStatus.installed">
+                                            🔒 关闭
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+
+                        <div class="mt-4">
+                            <button class="btn btn-success" @click="firewallOpenAll" :disabled="!firewallStatus.active || !firewallStatus.installed">
+                                🔓 开放所有 TProxy 端口
+                            </button>
+                            <button class="btn btn-secondary" @click="fetchFirewallStatus">
+                                🔄 刷新状态
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Firewall Autostart -->
+                    <div class="card">
+                        <h3>⚙️ 防火墙开机自启</h3>
+                        <p class="text-muted">
+                            设置防火墙是否随系统自动启动。
+                        </p>
+                        <div class="btn-group">
+                            <button class="btn btn-success" @click="firewallEnable" :disabled="!firewallStatus.installed">
+                                ✓ 启用开机自启
+                            </button>
+                            <button class="btn btn-danger" @click="firewallDisable" :disabled="!firewallStatus.installed">
+                                ✗ 禁用开机自启
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Warning Message -->
+                    <div v-if="!firewallStatus.installed" class="card" style="background: #fff3cd; border: 1px solid #ffc107;">
+                        <h3 style="color: #856404;">⚠️ firewalld 未安装</h3>
+                        <p style="color: #856404;">
+                            系统中未检测到 firewalld。请先安装 firewalld：
+                        </p>
+                        <pre style="background: #fff; padding: 1rem; border-radius: 0.25rem;">dnf install -y firewalld
+systemctl enable --now firewalld</pre>
                     </div>
                 </div>
             </div>

@@ -17,6 +17,7 @@ from backend.config_ctl import ConfigController
 from backend.monitor import Monitor
 from backend.systemd_ctl import SystemdController
 from backend.deploy_ctl import DeploymentController
+from backend.firewall import Firewall
 
 # 初始化 Flask 应用
 app = Flask(__name__)
@@ -32,6 +33,7 @@ config_ctl = ConfigController(PROXY_DIR)
 monitor = Monitor(cache_path=os.path.join(PROXY_DIR, '../cache/Tengine'))
 systemd_ctl = SystemdController()
 deploy_ctl = DeploymentController(PROXY_DIR, config_ctl)
+firewall_ctl = Firewall()
 
 
 def check_auth():
@@ -261,6 +263,25 @@ def clear_cache():
         subprocess.run(['rm', '-rf', f'{cache_path}/{cache_type}/*'])
 
     return json_response({'message': f'{cache_type} 缓存已清理'})
+
+
+@app.route('/api/cache/stats')
+def get_cache_stats():
+    """获取缓存统计信息"""
+    return json_response(monitor.get_cache_stats())
+
+
+@app.route('/api/cache/stats/by-type')
+def get_cache_stats_by_type():
+    """获取按类型分组的缓存统计"""
+    return json_response(monitor.get_cache_stats_by_type())
+
+
+@app.route('/api/cache/requests')
+def get_recent_requests():
+    """获取最近的请求记录"""
+    limit = request.args.get('limit', 50, type=int)
+    return json_response(monitor.get_recent_requests(limit))
 
 
 @app.route('/api/health')
@@ -551,6 +572,122 @@ def run_tests():
         })
     except Exception as e:
         return json_response({'success': False, 'error': str(e)}, 500)
+
+
+# ==================== 防火墙管理 API ====================
+
+@app.route('/api/firewall/status', methods=['GET'])
+def get_firewall_status():
+    """获取防火墙状态"""
+    return json_response(firewall_ctl.get_status())
+
+
+@app.route('/api/firewall/ports', methods=['GET'])
+def get_firewall_ports():
+    """获取防火墙端口状态"""
+    return json_response(firewall_ctl.get_port_status())
+
+
+@app.route('/api/firewall/start', methods=['POST'])
+def start_firewall():
+    """启动防火墙"""
+    if not check_auth():
+        return json_response({'error': 'Unauthorized'}, 401)
+
+    result = firewall_ctl.start()
+    status = 200 if result.get('success') else 400
+    return json_response(result, status)
+
+
+@app.route('/api/firewall/stop', methods=['POST'])
+def stop_firewall():
+    """停止防火墙"""
+    if not check_auth():
+        return json_response({'error': 'Unauthorized'}, 401)
+
+    result = firewall_ctl.stop()
+    status = 200 if result.get('success') else 400
+    return json_response(result, status)
+
+
+@app.route('/api/firewall/restart', methods=['POST'])
+def restart_firewall():
+    """重启防火墙"""
+    if not check_auth():
+        return json_response({'error': 'Unauthorized'}, 401)
+
+    result = firewall_ctl.restart()
+    status = 200 if result.get('success') else 400
+    return json_response(result, status)
+
+
+@app.route('/api/firewall/enable', methods=['POST'])
+def enable_firewall():
+    """启用防火墙开机自启"""
+    if not check_auth():
+        return json_response({'error': 'Unauthorized'}, 401)
+
+    result = firewall_ctl.enable()
+    status = 200 if result.get('success') else 400
+    return json_response(result, status)
+
+
+@app.route('/api/firewall/disable', methods=['POST'])
+def disable_firewall_autostart():
+    """禁用防火墙开机自启"""
+    if not check_auth():
+        return json_response({'error': 'Unauthorized'}, 401)
+
+    result = firewall_ctl.disable()
+    status = 200 if result.get('success') else 400
+    return json_response(result, status)
+
+
+@app.route('/api/firewall/open-port', methods=['POST'])
+def open_firewall_port():
+    """开放防火墙端口"""
+    if not check_auth():
+        return json_response({'error': 'Unauthorized'}, 401)
+
+    data = request.json
+    port = data.get('port')
+    protocol = data.get('protocol', 'tcp')
+
+    if not port:
+        return json_response({'error': 'Port is required'}, 400)
+
+    result = firewall_ctl.open_port(str(port), protocol)
+    status = 200 if result.get('success') else 400
+    return json_response(result, status)
+
+
+@app.route('/api/firewall/close-port', methods=['POST'])
+def close_firewall_port():
+    """关闭防火墙端口"""
+    if not check_auth():
+        return json_response({'error': 'Unauthorized'}, 401)
+
+    data = request.json
+    port = data.get('port')
+    protocol = data.get('protocol', 'tcp')
+
+    if not port:
+        return json_response({'error': 'Port is required'}, 400)
+
+    result = firewall_ctl.close_port(str(port), protocol)
+    status = 200 if result.get('success') else 400
+    return json_response(result, status)
+
+
+@app.route('/api/firewall/open-all', methods=['POST'])
+def open_all_firewall_ports():
+    """开放所有 TProxy 需要的端口"""
+    if not check_auth():
+        return json_response({'error': 'Unauthorized'}, 401)
+
+    result = firewall_ctl.open_all_required_ports()
+    status = 200 if result.get('success') else 400
+    return json_response(result, status)
 
 
 # ==================== 错误处理 ====================

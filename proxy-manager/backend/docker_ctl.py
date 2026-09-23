@@ -27,6 +27,22 @@ class DockerController:
                 'image': c.attrs.get('Config', {}).get('Image', '')
             }
         except docker.errors.NotFound:
+            # 特殊处理 proxy-generator：查找 proxy-generator-run-* 容器
+            if name == 'proxy-generator':
+                try:
+                    # 查找所有匹配的容器
+                    containers = self.client.containers.list(all=True, filters={'name': 'proxy-generator-run-'})
+                    if containers:
+                        c = containers[0]
+                        return {
+                            'name': name,
+                            'status': c.status,
+                            'health': c.attrs.get('State', {}).get('Health', {}).get('Status', 'unknown'),
+                            'started': c.attrs.get('State', {}).get('StartedAt', ''),
+                            'image': c.attrs.get('Config', {}).get('Image', '')
+                        }
+                except:
+                    pass
             return {'name': name, 'status': 'not_found'}
         except Exception as e:
             return {'name': name, 'status': 'error', 'error': str(e)}
@@ -34,7 +50,7 @@ class DockerController:
     def get_all_status(self) -> Dict[str, Dict]:
         """获取所有相关容器状态"""
         containers = {}
-        for name in ['proxy-generator', 'dnsmasq', 'tengine']:
+        for name in ['proxy-generator', 'dnsmasq', 'tengine', 'docker-registry', 'gitcache']:
             containers[name] = self.get_container_status(name)
         return containers
 
@@ -77,7 +93,8 @@ class DockerController:
 
     def get_logs(self, service: str, lines: int = 100) -> Dict:
         """获取服务日志"""
-        if service not in ['tengine', 'dnsmasq']:
+        valid_services = ['tengine', 'dnsmasq', 'docker-registry', 'gitcache', 'proxy-generator']
+        if service not in valid_services:
             return {'error': f'Unknown service: {service}'}
 
         try:

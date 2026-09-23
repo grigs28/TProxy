@@ -37,3 +37,4 @@ logs/
 
 # Cache
 .cache/
+.superpowers/

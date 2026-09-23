@@ -13,7 +13,7 @@ createApp({
         return {
             // 状态数据
             status: {
-                containers: { dnsmasq: {}, tengine: {} },
+                containers: { 'proxy-generator': {}, dnsmasq: {}, tengine: {}, 'docker-registry': {}, gitcache: {} },
                 nginx: {},
                 cache_size: '0B',
                 disk: {},
@@ -69,7 +69,19 @@ createApp({
             // 部署状态轮询定时器
             deployPollTimer: null,
             // 日志自动刷新定时器
-            logRefreshTimer: null
+            logRefreshTimer: null,
+            // 防火墙状态
+            firewallStatus: {
+                installed: false,
+                active: false,
+                open_ports: [],
+                message: ''
+            },
+            // 防火墙端口列表
+            firewallPorts: [],
+            // 最近请求
+            recentRequests: [],
+            recentRequestsCount: 0
         };
     },
 
@@ -84,13 +96,25 @@ createApp({
         tengineStatusClass() {
             return this.status.containers.tengine?.status || 'unknown';
         },
+        registryStatusClass() {
+            return this.status.containers['docker-registry']?.status || 'unknown';
+        },
+        gitcacheStatusClass() {
+            return this.status.containers.gitcache?.status || 'unknown';
+        },
         // 系统健康状态
         systemHealth() {
-            const generator = this.status.containers['proxy-generator']?.status;
             const dnsmasq = this.status.containers.dnsmasq?.status;
             const tengine = this.status.containers.tengine?.status;
-            if (generator === 'running' && dnsmasq === 'running' && tengine === 'running') return 'healthy';
-            if (generator === 'running' || dnsmasq === 'running' || tengine === 'running') return 'warning';
+            const registry = this.status.containers['docker-registry']?.status;
+            const gitcache = this.status.containers.gitcache?.status;
+            // 核心服务：dnsmasq, tengine
+            const coreRunning = dnsmasq === 'running' && tengine === 'running';
+            // 可选服务：docker-registry, gitcache
+            const optionalRunning = (registry === 'running' || registry === 'not_found') &&
+                                   (gitcache === 'running' || gitcache === 'not_found');
+            if (coreRunning && optionalRunning) return 'healthy';
+            if (coreRunning) return 'warning';
             return 'error';
         }
     },
@@ -129,7 +153,9 @@ createApp({
                 this.fetchConfigTemplate(),
                 this.fetchDns(),
                 this.fetchSystemStatus(),
-                this.fetchHostsMaster()
+                this.fetchHostsMaster(),
+                this.fetchFirewallStatus(),
+                this.fetchRecentRequests(50)
             ]);
         },
 
@@ -150,6 +176,17 @@ createApp({
                 this.status = res.data;
             } catch (e) {
                 console.error('获取状态失败:', e);
+            }
+        },
+
+        // 获取最近请求
+        async fetchRecentRequests(limit = 50) {
+            try {
+                const res = await axios.get(`${API_BASE}/api/cache/requests?limit=${limit}`);
+                this.recentRequests = res.data.requests || [];
+                this.recentRequestsCount = res.data.count || 0;
+            } catch (e) {
+                console.error('获取最近请求失败:', e);
             }
         },
 
@@ -639,6 +676,48 @@ address=/api.github.com/192.168.0.36
             return texts[status] || status;
         },
 
+        // 格式化请求时间
+        formatRequestTime(timeStr) {
+            if (!timeStr) return '-';
+            // 解析格式: 17/Feb/2026:09:47:59 +0000
+            const match = timeStr.match(/(\d{2}\/\w{3}\/\d{4}):([\d:]+) ([\+\-]\d{4})/);
+            if (match) {
+                return match[2]; // 只返回时间部分
+            }
+            return timeStr;
+        },
+
+        // 截断 URI
+        truncateUri(uri) {
+            if (!uri) return '-';
+            if (uri.length > 60) {
+                return uri.substring(0, 60) + '...';
+            }
+            return uri;
+        },
+
+        // 获取状态徽章样式类
+        getStatusBadgeClass(status) {
+            const s = String(status);
+            if (s.startsWith('2')) return 'badge-success';
+            if (s.startsWith('3')) return 'badge-info';
+            if (s.startsWith('4')) return 'badge-warning';
+            if (s.startsWith('5')) return 'badge-danger';
+            return 'badge-secondary';
+        },
+
+        // 获取缓存状态徽章样式类
+        getCacheStatusBadgeClass(status) {
+            switch (status) {
+                case 'HIT': return 'badge-success';
+                case 'MISS': return 'badge-warning';
+                case 'BYPASS': return 'badge-info';
+                case 'EXPIRED': return 'badge-secondary';
+                case '-': return 'badge-secondary';
+                default: return 'badge-light';
+            }
+        },
+
         // 获取容器状态样式类
         getContainerStatusClass(name) {
             return this.status.containers[name]?.status || 'unknown';
@@ -699,6 +778,137 @@ address=/api.github.com/192.168.0.36
                 }
             } catch (e) {
                 this.notify('error', '测试请求失败: ' + (e.response?.data?.error || e.message));
+            }
+        },
+
+        // ==================== 防火墙管理方法 ====================
+
+        // 获取防火墙状态
+        async fetchFirewallStatus() {
+            try {
+                const [statusRes, portsRes] = await Promise.all([
+                    axios.get(`${API_BASE}/api/firewall/status`),
+                    axios.get(`${API_BASE}/api/firewall/ports`)
+                ]);
+                this.firewallStatus = statusRes.data;
+                this.firewallPorts = portsRes.data;
+            } catch (e) {
+                console.error('获取防火墙状态失败:', e);
+                this.notify('error', '获取防火墙状态失败: ' + (e.response?.data?.error || e.message));
+            }
+        },
+
+        // 启动防火墙
+        async firewallStart() {
+            if (!confirm('确定要启动防火墙吗？')) {
+                return;
+            }
+            try {
+                const res = await axios.post(`${API_BASE}/api/firewall/start`, {}, {
+                    headers: { 'Authorization': AUTH_TOKEN }
+                });
+                this.notify('success', res.data.message || '防火墙已启动');
+                await this.fetchFirewallStatus();
+            } catch (e) {
+                this.notify('error', '启动失败: ' + (e.response?.data?.error || e.message));
+            }
+        },
+
+        // 停止防火墙
+        async firewallStop() {
+            if (!confirm('⚠️ 停止防火墙将降低系统安全性！\n\n确定要停止防火墙吗？')) {
+                return;
+            }
+            try {
+                const res = await axios.post(`${API_BASE}/api/firewall/stop`, {}, {
+                    headers: { 'Authorization': AUTH_TOKEN }
+                });
+                this.notify('success', res.data.message || '防火墙已停止');
+                await this.fetchFirewallStatus();
+            } catch (e) {
+                this.notify('error', '停止失败: ' + (e.response?.data?.error || e.message));
+            }
+        },
+
+        // 重启防火墙
+        async firewallRestart() {
+            try {
+                const res = await axios.post(`${API_BASE}/api/firewall/restart`, {}, {
+                    headers: { 'Authorization': AUTH_TOKEN }
+                });
+                this.notify('success', res.data.message || '防火墙已重启');
+                await this.fetchFirewallStatus();
+            } catch (e) {
+                this.notify('error', '重启失败: ' + (e.response?.data?.error || e.message));
+            }
+        },
+
+        // 启用防火墙开机自启
+        async firewallEnable() {
+            try {
+                const res = await axios.post(`${API_BASE}/api/firewall/enable`, {}, {
+                    headers: { 'Authorization': AUTH_TOKEN }
+                });
+                this.notify('success', res.data.message || '防火墙开机自启已启用');
+            } catch (e) {
+                this.notify('error', '启用失败: ' + (e.response?.data?.error || e.message));
+            }
+        },
+
+        // 禁用防火墙开机自启
+        async firewallDisable() {
+            try {
+                const res = await axios.post(`${API_BASE}/api/firewall/disable`, {}, {
+                    headers: { 'Authorization': AUTH_TOKEN }
+                });
+                this.notify('success', res.data.message || '防火墙开机自启已禁用');
+            } catch (e) {
+                this.notify('error', '禁用失败: ' + (e.response?.data?.error || e.message));
+            }
+        },
+
+        // 开放端口
+        async firewallOpenPort(port, protocol = 'tcp') {
+            try {
+                const res = await axios.post(`${API_BASE}/api/firewall/open-port`, { port, protocol }, {
+                    headers: { 'Authorization': AUTH_TOKEN }
+                });
+                this.notify('success', res.data.message || `端口 ${port}/${protocol} 已开放`);
+                await this.fetchFirewallStatus();
+            } catch (e) {
+                this.notify('error', '开放端口失败: ' + (e.response?.data?.error || e.message));
+            }
+        },
+
+        // 关闭端口
+        async firewallClosePort(port, protocol = 'tcp') {
+            if (!confirm(`⚠️ 关闭端口 ${port}/${protocol} 可能导致相关服务无法访问！\n\n确定要关闭吗？`)) {
+                return;
+            }
+            try {
+                const res = await axios.post(`${API_BASE}/api/firewall/close-port`, { port, protocol }, {
+                    headers: { 'Authorization': AUTH_TOKEN }
+                });
+                this.notify('success', res.data.message || `端口 ${port}/${protocol} 已关闭`);
+                await this.fetchFirewallStatus();
+            } catch (e) {
+                this.notify('error', '关闭端口失败: ' + (e.response?.data?.error || e.message));
+            }
+        },
+
+        // 开放所有 TProxy 端口
+        async firewallOpenAll() {
+            if (!confirm('确定要开放所有 TProxy 需要的端口吗？')) {
+                return;
+            }
+            try {
+                const res = await axios.post(`${API_BASE}/api/firewall/open-all`, {}, {
+                    headers: { 'Authorization': AUTH_TOKEN }
+                });
+                this.notify('success', res.data.message || '所有端口已开放');
+                await this.fetchFirewallStatus();
+            } catch (e) {
+                this.notify('error', '开放端口失败: ' + (e.response?.data?.error || e.message));
             }
         }
     }
