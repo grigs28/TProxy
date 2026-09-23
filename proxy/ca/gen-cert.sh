@@ -42,13 +42,28 @@ openssl x509 -req -in "$WORK/${DOMAIN}.csr" -CA tproxy-ca.crt -CAkey tproxy-ca.k
   -CAcreateserial -out "$WORK/${DOMAIN}.crt" -days "$DAYS" -sha256 \
   -extfile "$WORK/${DOMAIN}.ext"
 
-# 全部成功才落位。权限沿用旧文件（若存在），否则跟随当前 umask ——
-# 刻意的：tengine 的 worker 以非 root 身份读取证书文件，
-# 收紧权限会让 HTTPS 静默失效。
-if [[ -f "certs/${DOMAIN}.key" ]]; then
-  chmod --reference="certs/${DOMAIN}.key" "$WORK/${DOMAIN}.key" 2>/dev/null || true
-  chmod --reference="certs/${DOMAIN}.crt" "$WORK/${DOMAIN}.crt" 2>/dev/null || true
-fi
+# 落位前把【属主与权限】对齐到被替换的那个文件。
+#
+# 这不是洁癖，是必须的：管理界面在容器里以 root 签发，若直接把 root 属主、
+# root 默认权限的新文件 mv 进去，目标机上这些证书就变成 root 所有。此后
+# `rsync --inplace`（同步脚本必须用它来保住 inode）写不进 root 的 600 文件，
+# **整个同步会失败**，报的还是「Permission denied」——
+# 与「刚才在界面上签了张证书」看不出任何关联。
+#
+# 权限位逐文件对齐，不统一对齐到目录：目录是可执行的，
+# 拿目录当模板会把私钥变成可执行且人人可读。
+for f in key crt; do
+  src="$WORK/${DOMAIN}.${f}"
+  old="certs/${DOMAIN}.${f}"
+  if [[ -f "$old" ]]; then
+    chown --reference="$old" "$src" 2>/dev/null || true
+    chmod --reference="$old" "$src" 2>/dev/null || true
+  else
+    # 新证书：属主跟随 certs 目录；权限保留 openssl 的默认
+    # （私钥 600、证书 644），不跟随目录的权限位
+    chown --reference=certs "$src" 2>/dev/null || true
+  fi
+done
 mv -f "$WORK/${DOMAIN}.key" "certs/${DOMAIN}.key"
 mv -f "$WORK/${DOMAIN}.crt" "certs/${DOMAIN}.crt"
 

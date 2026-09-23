@@ -250,6 +250,40 @@ def test_resign_failure_keeps_old_cert_usable(ca):
     assert "签发失败" in r["msg"]
 
 
+def test_resign_preserves_file_mode(ca):
+    """替换文件不该改变它的权限位。
+
+    签发在容器里以 root 运行，新文件若带着 root 的默认权限落位，
+    目标机上就会变样；而 `rsync --inplace`（同步脚本必须用它保住 inode）
+    写不进权限不对的文件，表现是**整个同步失败**，
+    报错却是 Permission denied —— 与「刚签了张证书」看不出关联。
+    """
+    assert sign_cert("mode.example.com", "", 3650, ca)["ok"]
+    key = os.path.join(ca, "certs", "mode.example.com.key")
+    crt = os.path.join(ca, "certs", "mode.example.com.crt")
+    os.chmod(key, 0o640)
+    os.chmod(crt, 0o644)
+
+    assert sign_cert("mode.example.com", "", 3650, ca)["ok"]
+
+    assert oct(os.stat(key).st_mode & 0o777) == oct(0o640), \
+        f"私钥权限被改动: {oct(os.stat(key).st_mode & 0o777)}"
+    assert oct(os.stat(crt).st_mode & 0o777) == oct(0o644), \
+        f"证书权限被改动: {oct(os.stat(crt).st_mode & 0o777)}"
+
+
+def test_new_cert_private_key_stays_private(ca):
+    """新签的私钥不能让同组/其他人读到。
+
+    权限对齐不能拿 certs 目录当模板 —— 目录是可执行的（775），
+    套到私钥上会变成人人可读。
+    """
+    assert sign_cert("perm.example.com", "", 3650, ca)["ok"]
+    key = os.path.join(ca, "certs", "perm.example.com.key")
+    mode = os.stat(key).st_mode & 0o777
+    assert mode & 0o077 == 0, f"私钥对同组或其他人可读: {oct(mode)}"
+
+
 def test_resign_success_replaces_both_files(ca):
     """成功路径也要确认真的换新了 —— 否则「重新签发」可能只是原样重写。"""
     assert sign_cert("rotate.example.com", "", 30, ca)["ok"]
