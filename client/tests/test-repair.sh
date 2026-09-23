@@ -57,6 +57,43 @@ else
   fail=1
 fi
 
+echo "== 检出启用中的企业版源（非订阅会 401）=="
+mkdir -p "$T/d"
+cat > "$T/d/pve-enterprise.sources" <<'EOF'
+Types: deb
+URIs: https://enterprise.proxmox.com/debian/pve
+Suites: trixie
+Components: pve-enterprise
+EOF
+cat > "$T/d/proxmox.sources" <<'EOF'
+Types: deb
+URIs: http://download.proxmox.com/debian/pve
+Suites: trixie
+Components: pve-no-subscription
+EOF
+mkdir -p "$T/d/backup"
+cp "$T/d/pve-enterprise.sources" "$T/d/backup/pve-enterprise.sources.old"
+n=$(enterprise_sources "$T/d" | wc -l)
+if [[ "$n" -eq 1 ]]; then
+  echo "  ✅ 检出 1 个启用中的企业源（backup 里的不算）"
+else
+  echo "  ❌ 期望 1，实际 $n"
+  fail=1
+fi
+BACKUP_DIR="$T/bk" disable_enterprise_sources "$T/d" >/dev/null
+if [[ -z "$(enterprise_sources "$T/d")" ]]; then
+  echo "  ✅ 已禁用（移进 backup，可逆）"
+else
+  echo "  ❌ 仍在启用"
+  fail=1
+fi
+if [[ -f "$T/d/proxmox.sources" ]]; then
+  echo "  ✅ 无订阅源未被波及"
+else
+  echo "  ❌ 误动了无订阅源"
+  fail=1
+fi
+
 echo "== 检出 codename 与实际系统不符 =="
 printf 'deb http://mirrors.ustc.edu.cn/proxmox/debian/pve bookworm pve-no-subscription\n' > "$T/pve.list"
 if codename_mismatch "$T/pve.list" trixie; then
@@ -91,7 +128,8 @@ printf '[user]\n\tname = x\n' > "$T/gitclean"
 
 echo "== 两份实现不许分叉 =="
 for fn in dead_proxy_sources pve_sources_content ceph_sources_content \
-          codename_mismatch git_redirects; do
+          codename_mismatch git_redirects enterprise_sources \
+          disable_enterprise_sources; do
   if grep -q "^${fn}()" "$DIR/lib/repair.sh" && grep -q "^${fn}()" "$DIR/dist/tp.client.sh"; then
     echo "  ✅ 两份都有 $fn"
   else

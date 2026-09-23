@@ -79,6 +79,37 @@ codename_mismatch() {
   return 1
 }
 
+# 判断：启用中的企业版源（需付费订阅）。
+#
+# PVE 9 全新安装**默认启用** enterprise.proxmox.com。没有订阅密钥时
+# apt update 返回 401，Proxmox 组件就**静默冻结**在安装 ISO 的版本上 ——
+# Debian 基础源仍正常，所以安全更新照常，问题极难察觉。
+# 非订阅环境必须把它们禁掉，改用 pve-no-subscription。
+# 只列启用中的；已挪进 backup/ 或标了 Enabled: no 的不算。
+enterprise_sources() {
+  local d="${1:-$APT_SOURCES_D}"
+  grep -rlE 'enterprise\.proxmox\.com' "$d" 2>/dev/null | grep -v '/backup/'
+}
+
+# 禁用企业版源：移进 backup（可逆），不删除。
+# 用「移走」而不是「注释掉」：apt 的 deb822 格式没有注释行，
+# 而整文件移走最干净、也最容易恢复（拿到订阅后挪回来即可）。
+disable_enterprise_sources() {
+  local d="${1:-$APT_SOURCES_D}"
+  local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/apt"
+  local files
+  files=$(enterprise_sources "$d")
+  [[ -n "$files" ]] || return 0
+
+  mkdir -p "$bk" 2>/dev/null || true
+  local f n=0
+  while read -r f; do
+    [[ -n "$f" ]] || continue
+    mv "$f" "$bk/$(basename "$f").$(date +%s)" 2>/dev/null && n=$((n + 1))
+  done <<< "$files"
+  [[ $n -gt 0 ]]
+}
+
 # 本机 Debian codename（如 trixie）。非 Debian 系返回空。
 detect_codename() {
   local c=""

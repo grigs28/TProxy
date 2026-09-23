@@ -15,7 +15,7 @@
 ## [0.3.9] - 2026-09-24
 
 ### 新增
-- 客户端脚本**修复别的脚本留下的、会让机器不可用的配置**（`tp.client.sh` → 0.1.2）。
+- 客户端脚本**修复别的脚本留下的、会让机器不可用的配置**（`tp.client.sh` → 0.1.3）。
   PVE 机器（`.91-.99` / `.140-.144`，共 14 台，全是 Debian 13）跑过
   `ve/ve.client.sh`，留下三类问题，**都不会当场报错**，只在之后以
   「apt update 失败」「git 连不上」的形式暴露：
@@ -24,6 +24,12 @@
   - 把**已经正确的** PVE 9 源（deb822 + trixie）挪进 backup，
     换成旧单行 `.list` + `bookworm` codename —— 而 PVE 9 基于 Debian 13 (trixie)
   - `/etc/hosts` 覆盖令劫持失效（由 hosts 检查负责）
+- **企业版源（需付费订阅）的检测与禁用**。PVE 9 全新安装默认启用
+  `enterprise.proxmox.com`；非订阅环境下 `apt update` 返回 **401**，
+  且表现为 Proxmox 组件**静默冻结**在安装 ISO 的版本上 ——
+  Debian 基础源仍正常，所以安全更新照常，问题极难察觉。
+  检测后移进 backup（可逆，拿到订阅挪回来即可）
+
 - 新增 git 全局 `url.*.insteadOf` 重定向的检查与移除 ——
   把 `github.com` 重定向到别处，会让 git 流量绕过 TProxy 缓存
 - 发行版判断（`is_debian_like`），apt 相关的检查只对 Debian 系执行
