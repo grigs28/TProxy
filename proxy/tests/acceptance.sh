@@ -22,6 +22,7 @@ run "git 仓库缓存"       "$D/test-git.sh"
 run "Python 缓存"        "$D/test-python.sh"
 run "Node.js 缓存"       "$D/test-nodejs.sh"
 run "Java 缓存"          "$D/test-java.sh"
+run "管理界面"           "$D/test-manager.sh"
 
 echo "--- 防绕过说明 ---"
 echo "  ℹ️ QUIC(UDP 443) 与 DoH/DoT 的阻断属于客户端与网络层范畴，不在本计划范围"
@@ -33,7 +34,7 @@ docker compose -f "$D/../docker-compose.yml" ps
 echo
 
 if [[ $fail -eq 0 ]]; then
-  echo "ACCEPTANCE-PASS（六类制品缓存验收通过）"
+  echo "ACCEPTANCE-PASS（六类缓存 + 管理界面验收通过）"
 else
   echo "ACCEPTANCE-FAIL（存在失败项，见上）"
 fi

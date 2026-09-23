@@ -177,3 +177,23 @@ services:
     dns:
       - 223.5.5.5
       - 223.6.6.6
+
+  # 统一管理界面。
+  # 配置与缓存均【只读挂载】—— 界面只做展示与诊断，不直接写文件，
+  # 避免与运维手工编辑互相覆盖。
+  manager:
+    build:
+      context: ../manager
+      dockerfile: Dockerfile
+    image: tproxy/manager:local
+    container_name: v3-manager
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TPROXY_CACHE_BASE=${CACHE_BASE}
+      - TPROXY_CONF_D=/opt/TProxy/proxy/tengine/conf.d
+      - TPROXY_DNSMASQ_CONF=/opt/TProxy/proxy/dnsmasq/dnsmasq.conf
+      - TPROXY_CERTS_DIR=/opt/TProxy/proxy/ca/certs
+    volumes:
+      - /opt/TProxy/proxy:/opt/TProxy/proxy:ro
+      - ${CACHE_BASE}:${CACHE_BASE}:ro
