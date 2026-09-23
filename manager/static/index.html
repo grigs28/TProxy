@@ -39,7 +39,7 @@
     background: var(--bg);
     color: var(--text);
     font-family: var(--sans);
-    font-size: 14px;
+    font-size: 15px;
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
   }
@@ -62,7 +62,7 @@
     margin-bottom: 32px;
   }
   h1 {
-    font-size: 18px;
+    font-size: 19px;
     font-weight: 600;
     letter-spacing: 0.01em;
     margin: 0;
@@ -71,20 +71,20 @@
     color: var(--faint);
     font-weight: 400;
     margin-left: 8px;
-    font-size: 13px;
+    font-size: 14px;
   }
   .host {
     display: flex;
     align-items: center;
     gap: 10px;
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 14px;
     color: var(--muted);
   }
   .sep { color: var(--faint); }
   .ver {
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: 13px;
     color: var(--faint);
     border: 1px solid var(--border);
     border-radius: 3px;
@@ -106,7 +106,7 @@
     border: 1px solid var(--border);
     border-radius: 3px;
     padding: 2px 10px;
-    font-size: 12px;
+    font-size: 13px;
     transition: color .15s, border-color .15s;
   }
   .logout:hover, .logout:focus {
@@ -127,7 +127,7 @@
   /* ---- 区块 ---- */
   section { margin-bottom: 36px; }
   h2 {
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.09em;
     text-transform: uppercase;
@@ -156,14 +156,14 @@
      「哪类缓存没在工作」不需要读文字，扫一眼槽的形状即可。 */
   .cache-row {
     display: grid;
-    grid-template-columns: 96px 1fr 104px 74px;
+    grid-template-columns: 110px 1fr 116px 80px;
     align-items: center;
     gap: 14px;
     padding: 7px 0;
   }
   .cache-name {
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 14px;
     color: var(--text);
   }
   .bar {
@@ -188,11 +188,11 @@
   .bar.off > i { display: none; }
   .cache-size {
     font-family: var(--mono);
-    font-size: 12px;
+    font-size: 13px;
     color: var(--muted);
     text-align: right;
   }
-  .cache-state { font-size: 12px; text-align: right; }
+  .cache-state { font-size: 13px; text-align: right; }
   .cache-state.on  { color: var(--ok); }
   .cache-state.off { color: var(--faint); }
 
@@ -200,12 +200,12 @@
   table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 13px;
+    font-size: 14px;
   }
   th {
     text-align: left;
     font-weight: 500;
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--faint);
@@ -218,7 +218,7 @@
     vertical-align: top;
   }
   tr:last-child td { border-bottom: none; }
-  .mono { font-family: var(--mono); font-size: 12.5px; }
+  .mono { font-family: var(--mono); font-size: 13.5px; }
   .arrow { color: var(--faint); padding: 0 6px; }
   .muted { color: var(--muted); }
   .warn  { color: var(--warn); }
@@ -227,13 +227,13 @@
   /* ---- 状态与空态 ---- */
   .empty {
     color: var(--faint);
-    font-size: 13px;
+    font-size: 14px;
     padding: 18px 0;
     border: 1px dashed var(--border);
     border-radius: var(--radius);
     text-align: center;
   }
-  .loading { color: var(--faint); font-size: 13px; padding: 18px 0; }
+  .loading { color: var(--faint); font-size: 14px; padding: 18px 0; }
 
   .cols {
     display: grid;
@@ -243,7 +243,7 @@
 
   code {
     font-family: var(--mono);
-    font-size: 12.5px;
+    font-size: 13.5px;
     background: var(--raise);
     padding: 1px 5px;
     border-radius: 3px;
@@ -254,7 +254,7 @@
 
   @media (max-width: 720px) {
     .cols { grid-template-columns: 1fr; gap: 36px; }
-    .cache-row { grid-template-columns: 78px 1fr 84px; }
+    .cache-row { grid-template-columns: 92px 1fr 96px; }
     .cache-state { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
