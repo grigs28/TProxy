@@ -303,6 +303,8 @@
   </div>
 
 </div>
-<script src="/static/app.js"></script>
+<!-- 带版本号做缓存失效：改动前端后升 version.py 的版本即可让客户端拉到新版，
+     否则浏览器会一直用缓存的旧 app.js -->
+<script src="/static/app.js?v=0.2.6"></script>
 </body>
 </html>
