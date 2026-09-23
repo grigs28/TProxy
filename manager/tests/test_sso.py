@@ -139,6 +139,27 @@ def test_admin_is_allowed_and_can_read_apis(client, monkeypatch):
         assert rr.status_code == 200, f"{ep} -> {rr.status_code}"
 
 
+def test_ticket_on_root_also_works(client, monkeypatch):
+    """兼容「回调 URL 配成首页」的情况。
+
+    否则会死循环：首页收到 ticket 却不处理 → 重定向到 SSO → 又跳回首页…
+    """
+    monkeypatch.setattr("backend.sso.requests.get",
+                        _fake_verify({"id": 1, "username": "10015200",
+                                      "display_name": "张三", "is_admin": 1}))
+    r = client.get("/?ticket=ok")
+    assert r.status_code == 302
+    assert client.get("/api/status").status_code == 200, "带 ticket 访问首页也应完成登录"
+
+
+def test_root_ticket_still_denies_non_admin(client, monkeypatch):
+    monkeypatch.setattr("backend.sso.requests.get",
+                        _fake_verify({"id": 7, "username": "u7",
+                                      "display_name": "普通用户", "is_admin": 0}))
+    r = client.get("/?ticket=ok")
+    assert r.status_code == 403
+
+
 def test_logout_clears_session(client, monkeypatch):
     monkeypatch.setattr("backend.sso.requests.get",
                         _fake_verify({"id": 1, "username": "a",

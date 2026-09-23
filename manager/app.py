@@ -92,6 +92,10 @@ def create_app():
             return None
         if session.get("user"):
             return None
+        # 带 ticket 的请求必须放行到视图函数 —— 它就是登录回调本身。
+        # 若在这里拦掉，/  会直接跳回 SSO，ticket 永远处理不到（死循环）。
+        if request.args.get("ticket"):
+            return None
         # API 返回 401 而非重定向：让调用方能明确区分「未登录」与「无权限」
         if path.startswith("/api/"):
             return jsonify({"ok": False, "msg": "未登录"}), 401
@@ -150,6 +154,12 @@ def create_app():
     # ---- 页面与 API ----
     @app.route("/")
     def index():
+        # 兼容两种回调配置：若 yz-login 中该应用的 URL 配成首页而非 /callback，
+        # 登录后会跳回 /?ticket=xxx。此处一并处理，否则会陷入
+        # 「未登录 → 跳 SSO → 跳回带 ticket 的首页 → 又不处理 ticket → 再跳 SSO」的死循环。
+        ticket = request.args.get("ticket")
+        if ticket and not session.get("user"):
+            return callback()
         return send_from_directory(STATIC_DIR, "index.html")
 
     @app.route("/api/status")
