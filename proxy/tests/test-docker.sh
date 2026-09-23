@@ -29,5 +29,30 @@ else
   fail=1
 fi
 
+echo "== ⚠️ 认证流程端到端（这才是缓存可用的证据）=="
+# 上面的 /v2/ 断言无法区分「认证被正确透传」与「客户端永远拿到 401」。
+# 真正能证明可用的是：取匿名 token → 带 token 拉 manifest 得 200。
+TOKEN=$(curl -s --cacert "$CA" --resolve "auth.docker.io:443:${TARGET}" \
+  "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/alpine:pull" \
+  --max-time 30 2>/dev/null \
+  | python3 -c "import sys,json;print(json.load(sys.stdin).get('token',''))" 2>/dev/null || true)
+if [[ -n "$TOKEN" ]]; then
+  echo "  ✅ 取得匿名 token（auth.docker.io 透传正常）"
+  mcode=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$CA" \
+    --resolve "registry-1.docker.io:443:${TARGET}" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json" \
+    "https://registry-1.docker.io/v2/library/alpine/manifests/latest" --max-time 40 2>/dev/null) || mcode="000"
+  if [[ "$mcode" == "200" ]]; then
+    echo "  ✅ 带 token 拉 manifest -> HTTP 200"
+  else
+    echo "  ❌ 带 token 拉 manifest -> HTTP $mcode"
+    fail=1
+  fi
+else
+  echo "  ❌ 未取得 token —— 认证端点未被正确透传"
+  fail=1
+fi
+
 if [[ $fail -eq 0 ]]; then echo "DOCKER-ALL-PASS"; else echo "DOCKER-HAS-FAILURE"; fi
 exit $fail

@@ -59,9 +59,102 @@ services:
       - REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io
       - REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
       - REGISTRY_HTTP_ADDR=127.0.0.1:5001
-      - REGISTRY_HTTP_SECRET=tproxy-shared-secret
+      - REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET}
     volumes:
       - ${CACHE_BASE}/registry/docker:/var/lib/registry
+    dns:
+      - 223.5.5.5
+      - 223.6.6.6
+    healthcheck:
+      # /v2/ 对无凭据请求返回 401 —— 那是存活证据，不是失败。
+      # 用退出码判断而非状态码，故接受任何 HTTP 响应。
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5001/v2/ || [ $? -eq 8 ]"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # 其余上游的缓存实例。
+  # 每个被劫持的仓库域名都应有对应的 registry ——
+  # 否则就是「纯 MITM 成本、零缓存收益」，且 .18 出网中断时无兜底。
+  registry-quay:
+    image: registry:2
+    container_name: v3-reg-quay
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - REGISTRY_PROXY_REMOTEURL=https://quay.io
+      - REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
+      - REGISTRY_HTTP_ADDR=127.0.0.1:5000
+      - REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET}
+    volumes:
+      - ${CACHE_BASE}/registry/quay:/var/lib/registry
+    dns:
+      - 223.5.5.5
+      - 223.6.6.6
+
+  registry-gcr:
+    image: registry:2
+    container_name: v3-reg-gcr
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - REGISTRY_PROXY_REMOTEURL=https://gcr.io
+      - REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
+      - REGISTRY_HTTP_ADDR=127.0.0.1:5002
+      - REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET}
+    volumes:
+      - ${CACHE_BASE}/registry/gcr:/var/lib/registry
+    dns:
+      - 223.5.5.5
+      - 223.6.6.6
+
+  registry-ghcr:
+    image: registry:2
+    container_name: v3-reg-ghcr
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - REGISTRY_PROXY_REMOTEURL=https://ghcr.io
+      - REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
+      - REGISTRY_HTTP_ADDR=127.0.0.1:5003
+      - REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET}
+    volumes:
+      - ${CACHE_BASE}/registry/ghcr:/var/lib/registry
+    dns:
+      - 223.5.5.5
+      - 223.6.6.6
+
+  registry-k8s-io:
+    image: registry:2
+    container_name: v3-reg-k8s-io
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - REGISTRY_PROXY_REMOTEURL=https://registry.k8s.io
+      - REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
+      - REGISTRY_HTTP_ADDR=127.0.0.1:5005
+      - REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET}
+    volumes:
+      - ${CACHE_BASE}/registry/k8s-io:/var/lib/registry
+    dns:
+      - 223.5.5.5
+      - 223.6.6.6
+
+  # k8s.gcr.io 是废弃域名（会 302 到 registry.k8s.io），复用该实例即可，
+  # 不单独占用端口；registry.conf 里由 map 处理。
+  registry-mcr:
+    image: registry:2
+    container_name: v3-reg-mcr
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - REGISTRY_PROXY_REMOTEURL=https://mcr.microsoft.com
+      - REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
+      - REGISTRY_HTTP_ADDR=127.0.0.1:5006
+      - REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET}
+    volumes:
+      - ${CACHE_BASE}/registry/mcr:/var/lib/registry
     dns:
       - 223.5.5.5
       - 223.6.6.6

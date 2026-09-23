@@ -10,12 +10,14 @@ source .env
 echo "   HOST_IP=$HOST_IP  CACHE_BASE=$CACHE_BASE"
 
 echo "== 2/5 准备缓存目录 =="
-# 容器内 /var/cache/tproxy 挂载自此处，nginx 会在其中自动创建 os/ 子目录
-if [[ ! -d "${CACHE_BASE}/nginx" ]]; then
-  sudo mkdir -p "${CACHE_BASE}/nginx"
-fi
-sudo chmod 755 "${CACHE_BASE}" "${CACHE_BASE}/nginx" 2>/dev/null || true
-echo "   ${CACHE_BASE}/nginx 就绪"
+# 容器内 /var/cache/tproxy 挂载自 nginx/，nginx 会在其中自动创建 os/ 子目录
+sudo mkdir -p "${CACHE_BASE}"/{nginx,git,registry/{docker,quay,gcr,ghcr,k8s-io,mcr}}
+sudo chmod 755 "${CACHE_BASE}" 2>/dev/null || true
+# gitcache 容器以 uid 1000 运行（见 gitcache/Dockerfile），
+# 若目录由 docker 以 root 自动创建，它会无法写入、镜像建立失败。
+# 本机曾被手工修好，推倒重部署即复发 —— 故在此显式处理。
+sudo chown -R 1000:1000 "${CACHE_BASE}/git"
+echo "   ${CACHE_BASE} 就绪（含 git 目录属主 1000:1000）"
 
 echo "== 3/5 检查证书 =="
 if [[ ! -f ca/tproxy-ca.crt ]]; then
