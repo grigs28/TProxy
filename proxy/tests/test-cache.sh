@@ -38,9 +38,22 @@ fi
 echo "== 首次请求（仅记录，不断言——缓存可能已有内容）=="
 s1=$(cache_status "$PROBE"); echo "  -> ${s1:-无}"
 
-echo "== 二次请求必须为 HIT =="
-s2=$(cache_status "$PROBE"); echo "  -> ${s2:-无}"
-[[ "$s2" == "HIT" ]] || { echo "  ❌ 二次应为 HIT"; fail=1; }
+# 必须容错 STALE / UPDATING：元数据 TTL 仅 10 分钟，一旦缓存过期，
+# nginx 因 proxy_cache_background_update 会先返回过期内容（STALE）
+# 并后台刷新（UPDATING），刷新完成后才转 HIT。
+# 若断言「第二次必须 HIT」，恰好在过期时刻运行就会假失败。
+echo "== 缓存最终应进入 HIT 状态（容忍后台更新窗口）=="
+s2=""
+for i in 1 2 3 4 5; do
+  s2=$(cache_status "$PROBE")
+  echo "  第 $i 次 -> ${s2:-无}"
+  [[ "$s2" == "HIT" ]] && break
+  sleep 3
+done
+if [[ "$s2" != "HIT" ]]; then
+  echo "  ❌ 5 次尝试后仍未 HIT（最后状态: ${s2:-无}）"
+  fail=1
+fi
 
 echo "== 跟随 302 后应拿到合法 XML（证明跳转未出内网）=="
 body=$(curl -sL --cacert "$CA" "${RESOLVE[@]}" "$PROBE" --max-time 25 2>/dev/null | head -c 200)
