@@ -59,6 +59,12 @@ BUNDLE="$_t/cacert.pem"
 echo "# 其他 CA 占位" > "$BUNDLE"
 _runtime_candidates() { printf '%s\n' "$BUNDLE"; }
 
+# 模拟「继承来的 root 独占权限」。这不是假想：早先的 remove_runtime_ca
+# 用 mktemp + mv 落盘，而 mv 会把临时文件的 600 root:root 带过去，
+# 于是 bundle 变成只有 root 读得到 —— 普通用户跑 conda/pip 时连自己的
+# CA 包都打不开，curl 报的是 exit 77，信息里完全看不出是权限问题。
+chmod 600 "$BUNDLE"
+
 # 从 bundle 里取出我们追加的那张证书并算指纹。
 # 必须连 BEGIN/END 两行一起取出 —— 只给 base64 正文 openssl 是解析不了的。
 _bundle_fp() {
@@ -99,6 +105,26 @@ if grep -q "其他 CA 占位" "$BUNDLE"; then
   echo "  ✅ 原有内容未被破坏"
 else
   echo "  ❌ 原有内容被破坏"; fail=1
+fi
+
+# conda / pip 常以普通用户身份运行，bundle 必须对普通用户可读。
+# 注意别用 [[ -r ]] 判断 —— 脚本以 root 运行，root 永远读得到。
+_bm=$(stat -c '%a' "$BUNDLE")
+if (( (8#$_bm & 8#004) != 0 )); then
+  echo "  ✅ bundle 对普通用户可读 ($_bm)"
+else
+  echo "  ❌ bundle 权限 $_bm，普通用户的 conda/pip 读不到自己的 CA 包"; fail=1
+fi
+
+# 「内容已是最新」这条路径也必须修权限，否则它永远纠正不过来：
+# 一台机器只要曾经对过一次，之后再跑脚本都走这条分支。
+chmod 600 "$BUNDLE"
+install_runtime_ca "$_t/new.crt" >/dev/null
+_bm=$(stat -c '%a' "$BUNDLE")
+if (( (8#$_bm & 8#004) != 0 )); then
+  echo "  ✅ 内容已最新时仍会修正权限 ($_bm)"
+else
+  echo "  ❌ 走「已是最新」分支时权限没被修正（$_bm），这类机器永远好不了"; fail=1
 fi
 rm -rf "$_t"
 

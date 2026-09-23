@@ -84,8 +84,15 @@ Copyright (c) 2026 grigs28
   完全看不出是信任锚没换。实测确认：换根后 conda 包里仍是旧根（2036 年到期）
 - 现改为标记带上证书指纹，且追加前先移除此前追加的块；
   覆盖文件时用 `cat` 而非 `mv`，保住原文件的属主与 inode
+- 同时修正运行时 CA 包的**权限**：conda 的 bundle 可能只剩 root 可读
+  （早先 `remove` 用 `mktemp` + `mv` 落盘，把临时文件的 600 权限带了过去），
+  普通用户跑 conda/pip 连自己的 CA 包都打不开 —— curl 只报 exit 77
+  （`CURLE_SSL_CACERT_BADFILE`），信息里完全看不出是权限问题。
+  实测：本机 `curl` 解析到 `/opt/conda3/bin/curl`，其 bundle 为 600 root:root，
+  导致 `client/tests/test-client.sh` 的两项 HTTPS 检查一直失败
 - `client/lib/ca.sh` 与 `client/dist/tp.client.sh` 两处各自维护，均已修正，
-  并各自加了对应用例（换根后必须是新根、无残留、不破坏原有内容）
+  并各自加了对应用例（换根后必须是新根、无残留、不破坏原有内容、
+  普通用户可读、且「已是最新」分支同样会修权限）
 
 **根 CA 更换**（0.3.0）
 

@@ -92,6 +92,21 @@ _runtime_mark_for() {
   printf '%s %s' "$_RUNTIME_MARK" "${fp:-unknown}"
 }
 
+# 确保 bundle 对普通用户可读。
+# conda / pip 常以普通用户身份运行；bundle 若只剩 root 可读，
+# 它们连自己的 CA 包都打不开，curl 只报 exit 77，
+# 信息里完全看不出是权限问题。
+# ⚠️ 不能用 [[ -r ]] 判断 —— 本脚本以 root 运行，root 永远读得到。
+_runtime_make_readable() {
+  local f="$1" mode
+  mode=$(stat -c '%a' "$f" 2>/dev/null || echo "")
+  [[ -n "$mode" ]] || return 0
+  if (( (8#$mode & 8#004) == 0 )); then
+    chmod 644 "$f" 2>/dev/null || true
+  fi
+  return 0
+}
+
 # 去掉此前追加的 TProxy 块（标记行起、到文件末尾）。没有则原样返回。
 _runtime_strip() {
   local f="$1" tmp
@@ -116,6 +131,10 @@ install_runtime_ca() {
   while read -r f; do
     [[ -z "$f" ]] && continue
     if grep -qF "$mark" "$f" 2>/dev/null; then
+      # 内容已是最新，但权限未必对。这条分支必须先修权限再跳过：
+      # 一台机器只要曾经对过一次，之后每次跑都走到这里，
+      # 不修的话它永远好不了。
+      _runtime_make_readable "$f"
       echo "   $f 已是最新，跳过"
     elif ! _runtime_strip "$f"; then
       echo "   ⚠ $f 处理失败，跳过（请手工检查）"
@@ -124,6 +143,7 @@ install_runtime_ca() {
         printf '\n%s\n' "$mark"
         cat "$cert"
       } >> "$f"
+      _runtime_make_readable "$f"
       echo "   已更新 $f"
     fi
     found=1
