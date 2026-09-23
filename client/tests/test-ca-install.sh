@@ -8,7 +8,7 @@ source "$DIR/lib/ca.sh"
 fail=0
 
 echo "== 所需函数应已定义 =="
-for fn in install_system_ca install_docker_ca install_java_ca; do
+for fn in install_system_ca install_docker_ca install_java_ca install_runtime_ca; do
   if declare -F "$fn" >/dev/null; then
     echo "  ✅ $fn"
   else
