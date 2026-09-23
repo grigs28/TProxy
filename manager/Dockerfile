@@ -11,11 +11,13 @@ RUN apt-get update \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir flask
+# requests 用于向 yz-login 验证 ticket
+RUN pip install --no-cache-dir flask requests
 
 COPY . /app
 
-# 仅监听回环（见 app.py）。容器用 host 网络，故等价于只对本机暴露。
+# 监听地址由 MANAGER_BIND 控制（默认 0.0.0.0）。
+# 安全边界不靠绑定地址，而靠 yz-login SSO 认证 + 仅管理员可入。
 EXPOSE 5557
 
 CMD ["python3", "app.py"]

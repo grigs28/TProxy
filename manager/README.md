@@ -12,10 +12,45 @@ cd ../proxy && docker compose up -d manager
 cd manager && python3 app.py
 ```
 
-访问 `http://127.0.0.1:5557`。
+访问 `http://192.168.0.18:5557`（可从内网任意客户端访问）。
 
-> **仅绑定回环地址。** 界面没有认证机制，因此不做远程暴露。
-> 需远程访问时请走 SSH 隧道：`ssh -L 5557:127.0.0.1:5557 grigs@192.168.0.18`
+## 认证与授权
+
+管理端接入 **yz-login 统一登录（SSO）**，且**只允许管理员进入**。
+
+```
+浏览器 → 管理端
+   ↓ 未登录：302 到 {YZ_LOGIN_URL}/login?from=id:55
+yz-login 登录
+   ↓ 302 回 /callback?ticket=xxx
+管理端调 /api/ticket/verify 换取用户信息
+   ↓
+is_admin == 1 ？ ── 否 → 403「无权访问」，并说明需开通管理员权限
+                  └ 是 → 建立 session，进入仪表盘
+```
+
+| 配置 | 默认值 | 说明 |
+|---|---|---|
+| `YZ_LOGIN_URL` | `http://192.168.0.8` | yz-login 地址 |
+| `YZ_APP_REF` | `id:55` | 应用引用。用 `id:` 而非硬编码回调 URL，在 yz-login 后台改地址时自动跟随 |
+| `MANAGER_SECRET_KEY` | 自动生成 | session 签名密钥。未设置时生成并持久化到 `MANAGER_STATE_DIR`（默认 `/var/lib/tproxy-manager`），**不随代码入库、容器重启也不掉登录态** |
+| `MANAGER_BIND` | `0.0.0.0` | 监听地址。安全边界靠 SSO 而非绑定地址 |
+
+### 两条不可退让的规则
+
+**1. `is_admin` 严格判定，fail-closed**
+
+`is_admin` 经 JSON 传输后可能是 `0` / `"0"` / `false` / `1` / `"1"` 等多种形态。
+**不能用真值判断** —— Python 里 `"0"` 是真值，会直接放行一个普通用户。
+缺失该字段同样按非管理员处理。见 `backend/sso.py:is_admin()`。
+
+**2. 未登录不得拿到任何数据**
+
+所有 `/api/*` 返回 401（不是重定向，便于调用方区分「未登录」与「无权限」），
+页面重定向到 yz-login。仅 `/login`、`/callback`、`/logout`、`/healthz`、`/static/*` 公开。
+
+非管理员登录成功后会看到明确的「无权访问」页面并说明如何开通权限 ——
+而不是假装登录失败让人反复重试。
 
 ## 设计取舍
 

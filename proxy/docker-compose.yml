@@ -195,8 +195,20 @@ services:
       - TPROXY_DNSMASQ_CONF=/opt/TProxy/proxy/dnsmasq/dnsmasq.conf
       - TPROXY_CERTS_DIR=/opt/TProxy/proxy/ca/certs
       - TPROXY_LOG_DIR=/var/log/nginx
+      # ---- SSO 认证 ----
+      # 管理端接 yz-login 统一登录，且只放行 is_admin==1 的账号。
+      # 因此可以对内网开放，而不必再靠绑回环保护。
+      - YZ_LOGIN_URL=${YZ_LOGIN_URL:-http://192.168.0.8}
+      # 用应用引用而非硬编码回调 URL：在 yz-login 后台改地址时自动跟随
+      - YZ_APP_REF=${YZ_APP_REF:-id:55}
+      - MANAGER_BIND=0.0.0.0
+      - MANAGER_STATE_DIR=/var/lib/tproxy-manager
+      # MANAGER_SECRET_KEY 未设置时会自动生成并持久化到 MANAGER_STATE_DIR，
+      # 既不随代码入库、容器重启也不掉登录态
     volumes:
       - /opt/TProxy/proxy:/opt/TProxy/proxy:ro
       - ${CACHE_BASE}:${CACHE_BASE}:ro
       # nginx 日志（命中率统计的数据来源），只读
       - ./logs/tengine:/var/log/nginx:ro
+      # session 密钥等运行态数据（唯一可写挂载）
+      - ${CACHE_BASE}/manager:/var/lib/tproxy-manager:rw

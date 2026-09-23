@@ -14,15 +14,21 @@ from app import create_app
 def client(monkeypatch, tmp_path):
     (tmp_path / "conf").mkdir()
     (tmp_path / "certs").mkdir()
+    (tmp_path / "logs").mkdir()
     monkeypatch.setenv("TPROXY_CACHE_BASE", str(tmp_path))
     monkeypatch.setenv("TPROXY_CONF_D", str(tmp_path / "conf"))
     monkeypatch.setenv("TPROXY_DNSMASQ_CONF", str(tmp_path / "dnsmasq.conf"))
     monkeypatch.setenv("TPROXY_CERTS_DIR", str(tmp_path / "certs"))
     monkeypatch.setenv("TPROXY_LOG_DIR", str(tmp_path / "logs"))
-    (tmp_path / "logs").mkdir()
+    monkeypatch.setenv("MANAGER_SECRET_KEY", "test-secret-key")
     app = create_app()
     app.config["TESTING"] = True
-    return app.test_client()
+    c = app.test_client()
+    # 这些用例关注数据解析本身，认证由 test_sso.py 覆盖 ——
+    # 这里直接置入已登录的管理员 session，避免每个用例都走一遍 SSO
+    with c.session_transaction() as sess:
+        sess["user"] = {"id": 1, "username": "tester", "display_name": "测试管理员"}
+    return c
 
 
 def test_status_ok(client):
