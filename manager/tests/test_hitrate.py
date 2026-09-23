@@ -125,6 +125,103 @@ def test_all_hitrate_aggregates_failed_across_files():
         assert rows["os"]["rate"] == 100.0
 
 
+def _write_reqs(d, name, rows):
+    """rows: (uri, 状态码, cache状态)"""
+    p = os.path.join(d, name)
+    with open(p, "w") as f:
+        for uri, code, s in rows:
+            line = LINE.format(s).replace(" 200 696 ", f" {code} 696 ")
+            f.write(line.replace("GET / HTTP/1.1", f"GET {uri} HTTP/1.1"))
+    return p
+
+
+# ---------- 未命中明细（点命中率展开）----------
+
+def test_miss_breakdown_groups_same_shape():
+    """URL 里的内容哈希是变化的，逐条列出会得到一堆只出现一次的条目，
+    看不出规律；归并后才看得出「是某个仓库的元数据在反复回源」。"""
+    from backend.hitrate import miss_breakdown
+    with tempfile.TemporaryDirectory() as d:
+        _write_reqs(d, "os-repo-ssl.log", [
+            ("/r/repodata/aaaabbbbccccdddd1111222233334444-primary.xml.gz", 200, "MISS"),
+            ("/r/repodata/99998888777766665555444433332222-primary.xml.gz", 200, "MISS"),
+            ("/r/repodata/aaaabbbbccccdddd1111222233334444-primary.xml.gz", 200, "HIT"),
+        ])
+        r = miss_breakdown(d, "os")
+        assert r["miss"] == 2
+        assert len(r["groups"]) == 1, f"同形态应归并成一组: {r['groups']}"
+        g = r["groups"][0]
+        assert g["count"] == 2
+        assert "<hash>" in g["pattern"], f"哈希没被归并: {g['pattern']}"
+
+
+def test_miss_breakdown_excludes_hits():
+    from backend.hitrate import miss_breakdown
+    with tempfile.TemporaryDirectory() as d:
+        _write_reqs(d, "nodejs.log", [
+            ("/express", 200, "HIT"),
+            ("/express", 200, "HIT"),
+            ("/lodash", 200, "MISS"),
+        ])
+        r = miss_breakdown(d, "nodejs")
+        assert r["miss"] == 1
+        assert [g["pattern"] for g in r["groups"]] == ["/lodash"]
+
+
+def test_miss_breakdown_excludes_errors_but_reports_them():
+    """404 不进命中率分母，也不该混进「未命中明细」——
+    但它得报出来，否则看明细的人会以为未命中只有这么多。"""
+    from backend.hitrate import miss_breakdown
+    with tempfile.TemporaryDirectory() as d:
+        _write_reqs(d, "os-repo.log", [
+            ("/metalink?repo=/OS", 404, "MISS"),
+            ("/metalink?repo=/OS", 404, "MISS"),
+            ("/real/path", 200, "MISS"),
+        ])
+        r = miss_breakdown(d, "os")
+        assert r["miss"] == 1
+        assert r["failed"] == 2
+        assert [g["pattern"] for g in r["groups"]] == ["/real/path"]
+
+
+def test_miss_breakdown_sorted_by_count():
+    from backend.hitrate import miss_breakdown
+    with tempfile.TemporaryDirectory() as d:
+        rows = [("/hot", 200, "MISS")] * 5 + [("/cold", 200, "MISS")]
+        _write_reqs(d, "python.log", rows)
+        r = miss_breakdown(d, "python")
+        assert [g["pattern"] for g in r["groups"]] == ["/hot", "/cold"]
+
+
+def test_miss_breakdown_honours_limit():
+    from backend.hitrate import miss_breakdown
+    with tempfile.TemporaryDirectory() as d:
+        _write_reqs(d, "java.log", [(f"/p{i}", 200, "MISS") for i in range(10)])
+        r = miss_breakdown(d, "java", limit=3)
+        assert len(r["groups"]) == 3
+
+
+def test_miss_breakdown_unknown_type_is_empty():
+    from backend.hitrate import miss_breakdown
+    with tempfile.TemporaryDirectory() as d:
+        r = miss_breakdown(d, "not-a-type")
+        assert r["miss"] == 0 and r["groups"] == []
+
+
+def test_miss_breakdown_expired_kept_distinct_from_miss():
+    """EXPIRED 与 MISS 都是回源，但成因不同：
+    EXPIRED 是缓存里有、过期了；MISS 是压根没有。
+    混成一个数就看不出「该调 TTL」还是「该预热」。"""
+    from backend.hitrate import miss_breakdown
+    with tempfile.TemporaryDirectory() as d:
+        _write_reqs(d, "os-repo.log", [
+            ("/a", 200, "EXPIRED"),
+            ("/a", 200, "MISS"),
+        ])
+        r = miss_breakdown(d, "os")
+        assert r["groups"][0]["states"] == {"EXPIRED": 1, "MISS": 1}
+
+
 def test_lines_without_marker_ignored():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "a.log")

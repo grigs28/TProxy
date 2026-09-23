@@ -158,7 +158,13 @@ function renderHitrate(rows) {
     } else {
       // 命中率染色：低于 50% 值得注意，低于 20% 明显异常
       td2.className = "mono " + (r.rate >= 50 ? "" : r.rate >= 20 ? "warn" : "bad");
-      td2.textContent = `${r.rate}%`;
+      // 可点开未命中明细 —— 看到数字低，下一个问题必然是「哪些在回源」
+      const btn = document.createElement("button");
+      btn.className = "linkish";
+      btn.textContent = `${r.rate}%`;
+      btn.title = "点开看未命中明细";
+      btn.addEventListener("click", () => openMissDialog(r.type));
+      td2.appendChild(btn);
     }
 
     const mk = (v, cls) => {
@@ -189,6 +195,66 @@ function renderHitrate(rows) {
   }
   table.appendChild(tb);
   box.appendChild(table);
+}
+
+// ---- 未命中明细 ----
+// 命中率低的时候，下一个问题必然是「到底哪些在反复回源」。
+async function openMissDialog(type) {
+  const dlg = $("miss-dialog");
+  const box = $("miss-list");
+  const sum = $("miss-summary");
+  $("miss-title").textContent = `${TYPE_LABEL[type] || type} · 未命中明细`;
+  sum.textContent = "读取中…";
+  box.innerHTML = "";
+  dlg.showModal();
+
+  try {
+    const d = await getJSON(
+      `/api/hitrate/misses?type=${encodeURIComponent(type)}`);
+
+    const parts = [`共 ${d.miss} 次回源`];
+    // 错误另外说一句 —— 它们不进命中率，但看明细的人得知道还有这么多
+    if (d.failed) {
+      parts.push(`另有 ${d.failed} 次错误（4xx/5xx，不计入命中率）`);
+    }
+    sum.textContent = parts.join("　·　");
+
+    if (!d.groups.length) {
+      box.appendChild(emptyBox(
+        d.failed ? "回源全是错误请求，已计入上方的错误数"
+                 : "这段时间没有回源记录 —— 缓存全都命中了"));
+      return;
+    }
+
+    const table = document.createElement("table");
+    table.innerHTML =
+      '<thead><tr><th title="这条路径被回源取了多少次">次数</th>' +
+      "<th>路径形态</th></tr></thead>";
+    const tb = document.createElement("tbody");
+    for (const g of d.groups) {
+      const tr = document.createElement("tr");
+
+      const td1 = document.createElement("td");
+      td1.className = "mono";
+      td1.textContent = g.count;
+      // 状态并进 tooltip：MISS 是缓存里压根没有，EXPIRED 是有但过期了。
+      // 都是回源，但处置不同（前者该预热，后者该看 TTL）。
+      td1.title = Object.entries(g.states || {})
+        .map(([k, v]) => `${k} ${v}`).join("　");
+
+      const td2 = document.createElement("td");
+      td2.className = "mono muted pathcell";
+      td2.textContent = g.pattern;
+      td2.title = g.pattern;
+
+      tr.append(td1, td2);
+      tb.appendChild(tr);
+    }
+    table.appendChild(tb);
+    box.appendChild(table);
+  } catch (e) {
+    sum.textContent = `读取失败：${e.message}`;
+  }
 }
 
 // ---- 劫持规则 ----
@@ -872,6 +938,8 @@ function bindEvents() {
     $("rootca-preview").innerHTML = "";
     syncRootCaApply();
   });
+  // 未命中明细
+  $("miss-close").addEventListener("click", () => $("miss-dialog").close());
   // 更新日志
   $("version").addEventListener("click", openChangelog);
   $("changelog-close").addEventListener("click", () => $("changelog-dialog").close());

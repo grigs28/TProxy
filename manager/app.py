@@ -17,7 +17,7 @@ from backend.cache_stats import all_cache_usage
 from backend.certmgr import DEFAULT_DAYS, preview_sign, sign_cert
 from backend.certs import list_certs, root_ca_info
 from backend.config_read import parse_dnsmasq_rules, parse_nginx_servers
-from backend.hitrate import all_hitrate
+from backend.hitrate import all_hitrate, miss_breakdown
 from backend.confd import add_conf, list_confs, read_conf, write_conf
 from backend.rootca import (CONFIRM_WORD, DEFAULT_ROOT_DAYS, preview_rotate,
                             rotate_root_ca)
@@ -288,6 +288,20 @@ def create_app():
     @app.route("/api/hitrate")
     def hitrate():
         return jsonify({"hitrate": all_hitrate(cfg("TPROXY_LOG_DIR"))})
+
+    @app.route("/api/hitrate/misses")
+    def hitrate_misses():
+        """某个类型的未命中明细，供界面点命中率展开。
+
+        按「路径形态」归并（去掉内容哈希），否则同一份元数据会因为哈希不同
+        被列成几十条，反而看不出是它在反复回源。
+        """
+        t = request.args.get("type", "")
+        try:
+            limit = min(int(request.args.get("limit", 40)), 200)
+        except ValueError:
+            limit = 40
+        return jsonify(miss_breakdown(cfg("TPROXY_LOG_DIR"), t, limit=limit))
 
     # ---- 新增上游 ----
     # 这两个端点会【写生产配置】，故只走 POST，且依赖 before_request 的登录校验。

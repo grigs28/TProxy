@@ -302,6 +302,23 @@
   }
   tr:last-child td { border-bottom: none; }
   .mono { font-family: var(--mono); font-size: 14.5px; }
+  /* 长路径要能断行，否则表格被一条 URL 撑破 */
+  .pathcell { word-break: break-all; }
+  /* 看起来是文字、实际可点。
+     命中率本身最该能点 —— 看到数字低，下一个问题必然是「哪些在回源」，
+     而它又不该长成一个按钮的样子把表格搞乱。 */
+  .linkish {
+    font: inherit;
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: inherit;
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+    transition: color .15s;
+  }
+  .linkish:hover, .linkish:focus { color: var(--accent); }
   .arrow { color: var(--faint); padding: 0 6px; }
   .muted { color: var(--muted); }
   .warn  { color: var(--warn); }
@@ -603,6 +620,16 @@
     <button class="btn primary" id="rootca-apply-btn" disabled>确认更换</button>
   </div>
   <div class="msg" id="rootca-msg"></div>
+</dialog>
+
+<!-- 未命中明细：点命中率打开 -->
+<dialog id="miss-dialog" class="wide">
+  <h3 id="miss-title">未命中明细</h3>
+  <p class="hint" id="miss-summary"></p>
+  <div id="miss-list" class="scroll"></div>
+  <div class="actions">
+    <button class="btn" id="miss-close">关闭</button>
+  </div>
 </dialog>
 
 <!-- 更新日志：点顶栏版本号打开 -->

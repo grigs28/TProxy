@@ -112,6 +112,74 @@ def parse_log_hitrate(path, tail=DEFAULT_TAIL):
     return result
 
 
+# 日志行里的请求路径：`"GET /path HTTP/1.1"`
+_REQUEST_RE = re.compile(r'"(?:GET|HEAD|POST|PUT|DELETE) (\S+) HTTP/')
+
+# 内容寻址的哈希：openEuler 的元数据文件名形如
+# `2f02e36c842e12d4b7f718c61d9145369d7954f09f5b367c8d879ce5ac1b1ebb-primary.xml.gz`
+# 每次都不同，逐条列出就成了一堆只出现一次的行，看不出规律。
+_HASH_RE = re.compile(r"\b[0-9a-fA-F]{16,}\b")
+
+
+def _normalize(uri):
+    """把 URL 归并成「形态」——去掉变化的哈希，只留下稳定的部分。"""
+    return _HASH_RE.sub("<hash>", uri)
+
+
+def miss_breakdown(log_dir, type_key, limit=30, tail=DEFAULT_TAIL):
+    """把某类型的未命中按路径形态归并，回答「命中率为什么低」。
+
+    只统计**进入命中率分母**的那些回源（MISS / BYPASS / EXPIRED）。
+    4xx/5xx 单独计数返回，不混进明细 —— 它们本来就不该算未命中，
+    但如果不说出来，看明细的人会以为未命中只有这么多。
+
+    EXPIRED 与 MISS 分开记：都是回源，但成因不同 ——
+    EXPIRED 是缓存里有、过期了（该调 TTL），MISS 是压根没有（该预热）。
+    """
+    files = LOG_MAP.get(type_key)
+    if not files:
+        return {"type": type_key, "miss": 0, "failed": 0, "groups": []}
+
+    groups = {}
+    total_miss = total_failed = 0
+
+    for name in files:
+        path = os.path.join(log_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            lines = _tail_lines(path, tail)
+        except OSError:
+            continue
+
+        for line in lines:
+            m = _STATUS_RE.search(line)
+            if not m:
+                continue
+            state = m.group(1).upper()
+            if state not in MISS_STATES:
+                continue
+
+            cm = _STATUS_CODE_RE.search(line)
+            if cm and int(cm.group(1)) >= 400:
+                total_failed += 1
+                continue
+
+            rm = _REQUEST_RE.search(line)
+            if not rm:
+                continue
+
+            total_miss += 1
+            key = _normalize(rm.group(1))
+            g = groups.setdefault(key, {"pattern": key, "count": 0, "states": {}})
+            g["count"] += 1
+            g["states"][state] = g["states"].get(state, 0) + 1
+
+    ordered = sorted(groups.values(), key=lambda g: -g["count"])[:limit]
+    return {"type": type_key, "miss": total_miss,
+            "failed": total_failed, "groups": ordered}
+
+
 def all_hitrate(log_dir):
     """汇总各类缓存的命中率。"""
     rows = []

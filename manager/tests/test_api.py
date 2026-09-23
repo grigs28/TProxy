@@ -351,6 +351,41 @@ def test_hitrate_lists_six_types(client):
         assert t in types
 
 
+def test_hitrate_misses_lists_grouped_misses(client, tmp_path):
+    """点命中率要能看到「到底哪些在回源」—— 这是命中率低时唯一的下一步。"""
+    line = ('127.0.0.1 - [23/Sep/2026:05:09:28 +0000] "GET {} HTTP/1.1" 200 696 '
+            '"-" "curl" cache={}\n')
+    (tmp_path / "logs" / "python.log").write_text(
+        line.format("/pkg/aaaabbbbccccdddd1111222233334444.whl", "MISS") * 3 +
+        line.format("/pkg/aaaabbbbccccdddd1111222233334444.whl", "HIT") +
+        line.format("/simple/", "MISS"))
+    d = client.get("/api/hitrate/misses?type=python").get_json()
+    assert d["miss"] == 4
+    assert "<hash>" in d["groups"][0]["pattern"], d["groups"]
+    assert d["groups"][0]["count"] == 3
+
+
+def test_hitrate_misses_reports_errors_separately(client, tmp_path):
+    line = ('127.0.0.1 - [23/Sep/2026:05:09:28 +0000] "GET /x HTTP/1.1" 404 696 '
+            '"-" "curl" cache=MISS\n')
+    (tmp_path / "logs" / "python.log").write_text(line * 4)
+    d = client.get("/api/hitrate/misses?type=python").get_json()
+    assert d["miss"] == 0
+    assert d["failed"] == 4
+    assert d["groups"] == []
+
+
+def test_hitrate_misses_unknown_type(client):
+    d = client.get("/api/hitrate/misses?type=nope").get_json()
+    assert d["miss"] == 0 and d["groups"] == []
+
+
+def test_hitrate_misses_requires_login(client):
+    with client.session_transaction() as sess:
+        sess.clear()
+    assert client.get("/api/hitrate/misses?type=os").status_code == 401
+
+
 def test_hitrate_reads_real_log_format(client, tmp_path):
     """用与 nginx.conf `log_format main` 一致的行验证端到端解析。"""
     line = ('127.0.0.1 - [23/Sep/2026:05:09:28 +0000] "GET / HTTP/1.1" 200 696 '
