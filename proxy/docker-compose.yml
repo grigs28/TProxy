@@ -3,7 +3,10 @@
 # tengine: 80/443 入口 + TLS 终结 + 按 Host 分流 + proxy_cache
 services:
   dnsmasq:
-    image: alpine:3.19
+    build:
+      context: ./dnsmasq
+      dockerfile: Dockerfile
+    image: tproxy/dnsmasq:local
     container_name: v3-dnsmasq
     restart: unless-stopped
     network_mode: host
@@ -11,8 +14,7 @@ services:
       - NET_ADMIN
     volumes:
       - ./dnsmasq/dnsmasq.conf:/etc/dnsmasq.conf:ro
-    command: >
-      sh -c "apk add --no-cache dnsmasq && exec dnsmasq -k -C /etc/dnsmasq.conf"
+      - ./dnsmasq/hosts:/etc/dnsmasq-hosts:ro
     healthcheck:
       test: ["CMD", "nslookup", "localhost", "127.0.0.1"]
       interval: 10s
