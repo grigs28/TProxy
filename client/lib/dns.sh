@@ -13,6 +13,89 @@ TPROXY_DNS_FALLBACK=("223.5.5.5" "119.29.29.29")
 
 BACKUP_DIR="/var/backups/tproxy-client"
 BACKUP_ORIGINAL="$BACKUP_DIR/resolv.conf.original"
+BACKUP_HOSTS="$BACKUP_DIR/hosts.original"
+
+# TProxy 会劫持的域名。客户端侧需要这份清单做两件事：
+#   1. 自检时核对这些域名确实指向代理
+#   2. 检查 /etc/hosts 有没有把它们钉在公网 IP 上 —— 那会让劫持完全失效
+# ⚠️ 要与服务端 dnsmasq.conf 的 address= 规则保持一致。
+HIJACK_DOMAINS=(
+  repo.openeuler.org mirrors.openeuler.org
+  registry-1.docker.io auth.docker.io
+  pypi.org files.pythonhosted.org
+  registry.npmjs.org
+  repo1.maven.org
+  github.com
+)
+
+# ---- /etc/hosts 覆盖检查 ----
+#
+# 为什么必须查：/etc/nsswitch.conf 里 `hosts: files dns ...` —— **files 排在 dns 之前**，
+# 所以 /etc/hosts 里的一条记录会稳稳压过 TProxy 的 DNS 劫持。
+# 而自检用的 `dig` 绕过 NSS（直接问 nameserver），永远看不到它 ——
+# 于是表现为「自检全绿、劫持其实完全没生效」，真实程序直连公网。
+# 这个坑在本项目里出现过两次（.18 服务端、.19 客户端），故做成显式检查。
+
+# 判断：列出 /etc/hosts 里钉死了的劫持域名。只读，不改任何东西。
+# 匹配域名**及其子域** —— dnsmasq 的 address=/github.com/ 同样覆盖
+# *.github.com，所以钉死 www.github.com 一样会破坏劫持。
+hosts_pinned_domains() {
+  local f="${1:-/etc/hosts}" d
+  [[ -f "$f" ]] || return 0
+  for d in "${HIJACK_DOMAINS[@]}"; do
+    awk -v want="$d" '
+      # 子域判定必须用「后缀相等」，不能用 index(...) == 长度差 ——
+      # 后者在两串**等长**时会得到 0 == 0 而误判
+      # （registry.npmjs.org 与 repo.openeuler.org 同为 18 字符）。
+      function is_sub(host, d) {
+        return host == d || substr(host, length(host) - length(d)) == "." d
+      }
+      { sub(/#.*/, "") }
+      NF >= 2 {
+        for (i = 2; i <= NF; i++) if (is_sub($i, want)) { print want; exit }
+      }
+    ' "$f"
+  done
+}
+
+# 修正：删掉 /etc/hosts 里钉死劫持域名的行。
+# **先判断** —— 一行都没命中时一个字节都不动（那是人家有意配的就别碰）。
+hosts_unpin() {
+  local f="${1:-/etc/hosts}" pinned
+  pinned=$(hosts_pinned_domains "$f")
+  [[ -n "$pinned" ]] || return 0
+
+  # 只备份第一次，重复执行不覆盖（与 resolv.conf 的备份同理）
+  if [[ ! -f "$BACKUP_HOSTS" ]]; then
+    mkdir -p "$BACKUP_DIR" 2>/dev/null || true
+    cp -a "$f" "$BACKUP_HOSTS" 2>/dev/null || true
+  fi
+
+  local tmp
+  tmp=$(mktemp) || return 1
+  if ! awk -v domains="${HIJACK_DOMAINS[*]}" '
+        BEGIN { ndoms = split(domains, doms, " ") }
+        function is_sub(host, d) {
+          return host == d || substr(host, length(host) - length(d)) == "." d
+        }
+        {
+          line = $0
+          sub(/#.*/, "", line)
+          n = split(line, a, /[ \t]+/)
+          drop = 0
+          for (i = 2; i <= n && !drop; i++)
+            for (j = 1; j <= ndoms; j++)
+              if (is_sub(a[i], doms[j])) { drop = 1; break }
+          if (!drop) print $0
+        }
+      ' "$f" > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"; return 1
+  fi
+  # 用 cat 覆盖而非 mv：保住原文件的属主与 inode
+  cat "$tmp" > "$f" || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+  return 0
+}
 
 # 注意：不含 202.99.192.68 —— 运营商 DNS 存在劫持/污染（spec §4.3 明确禁用）。
 # 114.114.114.114 实测延迟高 5-6 倍，亦已淘汰。
@@ -105,6 +188,26 @@ configure_dns() {
   # 清掉可能存在的本地 DNS 缓存，避免改了配置却仍解析到旧结果
   command -v nscd >/dev/null 2>&1 && nscd -i hosts >/dev/null 2>&1 || true
   echo "DNS 已配置（检测到机制: $mgr）"
+
+  # 配好 DNS 还不够：/etc/hosts 里的记录会把它整个压过去
+  # （nsswitch 里 files 排在 dns 之前），而 dig 看不到这一点。
+  # 不查的话这台机器看起来接入成功，实际劫持一个都没生效。
+  local pinned d
+  pinned=$(hosts_pinned_domains)
+  if [[ -z "$pinned" ]]; then
+    echo "/etc/hosts 无覆盖"
+    return 0
+  fi
+  echo "⚠ /etc/hosts 钉死了这些劫持域名，DNS 劫持对它们无效："
+  while read -r d; do
+    [[ -n "$d" ]] && echo "    $d"
+  done <<< "$pinned"
+  if hosts_unpin; then
+    echo "  已移除（原文件备份在 $BACKUP_HOSTS）"
+    command -v nscd >/dev/null 2>&1 && nscd -i hosts >/dev/null 2>&1 || true
+  else
+    echo "  ⚠ 自动移除失败，请手工删除上述域名在 /etc/hosts 里的记录"
+  fi
 }
 
 # 供 --rollback 调用
