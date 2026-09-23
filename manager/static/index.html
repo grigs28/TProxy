@@ -261,6 +261,13 @@
     font-size: 12.5px;
     margin-top: 2px;
   }
+  .rootca .btn { margin-left: 10px; }
+  /* 危险操作按钮：平时与其他按钮无异，悬停才露出警示色，
+     避免它看起来像个可以随便点的东西 */
+  .btn.danger:hover, .btn.danger:focus {
+    color: var(--bad);
+    border-color: var(--bad);
+  }
   .rootca.warn { border-left-color: var(--warn); }
   .rootca.warn .days { color: var(--warn); }
   .rootca.bad  { border-left-color: var(--bad); }
@@ -541,6 +548,32 @@
     <button class="btn primary" id="cert-apply-btn" disabled>确认签发</button>
   </div>
   <div class="msg" id="cert-msg"></div>
+</dialog>
+
+<!-- 更换根 CA —— 全系统破坏性最强的操作 -->
+<dialog id="rootca-dialog">
+  <h3>更换根 CA</h3>
+  <p class="hint">
+    新根 CA 是一份<strong>新的信任锚</strong>，不是延长旧根的有效期
+    （证书的到期时间写在签名里，改不了）。后果：
+    现有全部域名证书立即失效、必须一起重签；
+    <strong>每台客户端都要重新安装根 CA</strong>，没有灰度窗口。
+  </p>
+  <div class="field">
+    <label for="rootca-days">新根 CA 有效期（天）</label>
+    <input id="rootca-days" type="number" min="365" max="36500" step="365">
+  </div>
+  <div id="rootca-preview"></div>
+  <div class="field">
+    <label for="rootca-confirm">确认更换 —— 输入 <code id="rootca-word">REPLACE</code></label>
+    <input id="rootca-confirm" placeholder="REPLACE" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="actions">
+    <button class="btn" id="rootca-cancel">取消</button>
+    <button class="btn" id="rootca-preview-btn">预览改动</button>
+    <button class="btn primary" id="rootca-apply-btn" disabled>确认更换</button>
+  </div>
+  <div class="msg" id="rootca-msg"></div>
 </dialog>
 
 <!-- 更新日志：点顶栏版本号打开 -->

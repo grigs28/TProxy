@@ -72,6 +72,22 @@ def test_parse_sans_splits_and_dedupes():
     assert parse_sans(None) == []
 
 
+def test_parse_sans_accepts_list():
+    """换根时 SAN 是从原证书读回来的**列表**。
+
+    只认字符串的话，`['a.example.com']` 会被 str() 成带方括号引号的文本，
+    当成域名后校验必失败 —— 症状是换根时「所有域名重签失败」，
+    而真因是参数类型，与域名本身毫无关系。
+    """
+    assert parse_sans(["a.example.com", "b.example.com"]) == \
+        ["a.example.com", "b.example.com"]
+    # 元素里带分隔符也要能拆开
+    assert parse_sans(["a.example.com b.example.com"]) == \
+        ["a.example.com", "b.example.com"]
+    assert parse_sans(["a.example.com", "a.example.com"]) == ["a.example.com"]
+    assert parse_sans([]) == []
+
+
 def test_valid_request_cleaned():
     ok, err, clean = validate_cert_request(
         "cn.example.com", "a.example.com, cn.example.com", "3650")

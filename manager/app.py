@@ -19,6 +19,8 @@ from backend.certs import list_certs, root_ca_info
 from backend.config_read import parse_dnsmasq_rules, parse_nginx_servers
 from backend.hitrate import all_hitrate
 from backend.confd import add_conf, list_confs, read_conf, write_conf
+from backend.rootca import (CONFIRM_WORD, DEFAULT_ROOT_DAYS, preview_rotate,
+                            rotate_root_ca)
 from backend.upstream import CATEGORIES, apply_upstream, preview_upstream
 from version import (DEFAULT_CHANGELOG, asset_version, get_version,
                      read_changelog, version_from_changelog)
@@ -36,6 +38,10 @@ DEFAULTS = {
     # 版本号的唯一来源。容器内由 compose 挂载（:ro）；
     # 本机直跑时该路径就是仓库根的同名文件。
     "TPROXY_CHANGELOG": DEFAULT_CHANGELOG,
+    # 客户端接入脚本的下载目录（NAS 上的软件发布目录）。
+    # 容器内是 compose 挂进来的挂载点，宿主路径由 .env 的 DIST_DIR 决定。
+    # 换根后新根 CA 要发布到这里，否则客户端拿不到它。
+    "TPROXY_DIST_DIR": "/opt/TProxy/dist",
     "YZ_LOGIN_URL": "http://192.168.0.8",
     # 用应用引用而非硬编码回调 URL：在 yz-login 后台改回调地址时自动跟随
     "YZ_APP_REF": "id:55",
@@ -91,6 +97,11 @@ def create_app():
 
     def ca_dir():
         return os.path.join(cfg("TPROXY_PROXY_DIR"), "ca")
+
+    def dist_dir():
+        """分发目录。显式配成空串表示「本环境不发布」，而不是回退到默认路径 ——
+        否则测试或本地跑会把生产用的分发目录当成目标。"""
+        return os.environ.get("TPROXY_DIST_DIR", DEFAULTS["TPROXY_DIST_DIR"]).strip()
 
     def sso_redirect():
         """直接跳 yz-login，不再经本地 /login 中转一次。"""
@@ -233,7 +244,32 @@ def create_app():
             # 且每台客户端都必须重新安装。dnsmasq 与 tengine 的界面都要能一眼看到它。
             "root_ca": root_ca_info(ca_dir()),
             "default_days": DEFAULT_DAYS,
+            "root_default_days": DEFAULT_ROOT_DAYS,
         })
+
+    # ---- 更换根 CA ----
+    # 全系统破坏性最强的操作：所有域名证书立即失效、每台客户端都要重装。
+    # 故除了登录校验，还要求显式确认词 —— 且确认词在服务端校验，
+    # 前端那个输入框只是提示，不是安全边界。
+    @app.route("/api/rootca/preview", methods=["POST"])
+    def rootca_preview():
+        d = request.get_json(silent=True) or {}
+        return jsonify(preview_rotate(ca_dir(),
+                                      d.get("days", DEFAULT_ROOT_DAYS),
+                                      dist_dir()))
+
+    @app.route("/api/rootca/apply", methods=["POST"])
+    def rootca_apply():
+        d = request.get_json(silent=True) or {}
+        if (d.get("confirm") or "").strip() != CONFIRM_WORD:
+            return jsonify({
+                "ok": False,
+                "msg": f"未确认。此操作会替换根 CA 并重签全部域名证书，"
+                       f"需在确认框输入 {CONFIRM_WORD}",
+            })
+        return jsonify(rotate_root_ca(ca_dir(),
+                                      d.get("days", DEFAULT_ROOT_DAYS),
+                                      dist_dir=dist_dir()))
 
     # ---- 签发 / 重新签发域名证书 ----
     # 会【写正在使用的证书文件】，故只走 POST，且依赖 before_request 的登录校验。

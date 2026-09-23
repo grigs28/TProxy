@@ -203,6 +203,8 @@ services:
       - YZ_APP_REF=${YZ_APP_REF:-id:55}
       - MANAGER_BIND=0.0.0.0
       - MANAGER_STATE_DIR=/var/lib/tproxy-manager
+      # 与下面的 dist 挂载点必须一致（见 .env 的 DIST_DIR）
+      - TPROXY_DIST_DIR=/opt/TProxy/dist
       # MANAGER_SECRET_KEY 未设置时会自动生成并持久化到 MANAGER_STATE_DIR，
       # 既不随代码入库、容器重启也不掉登录态
     volumes:
@@ -226,3 +228,10 @@ services:
       - ./ca:/opt/TProxy/proxy/ca:rw
       # session 密钥等运行态数据
       - ${CACHE_BASE}/manager:/var/lib/tproxy-manager:rw
+      # 客户端分发目录（NAS 上的软件发布目录）。换根后新根 CA 要发布到这里，
+      # 客户端接入脚本从这儿下载它。
+      # ⚠️ 这是本容器第二个可写挂载点，写进去的是**全网客户端的信任锚** ——
+      #    能写它就等于能让所有客户端信任一张伪造的根 CA。
+      #    与 ca 目录同级的风险，理由也相同：换根必须能自动发布，
+      #    漏发布的表现是「客户端拿不到新根 → 全网失联」，且与换根毫无表面关联。
+      - ${DIST_DIR}:/opt/TProxy/dist:rw

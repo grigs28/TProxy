@@ -30,27 +30,37 @@ import subprocess
 from backend.certs import cert_info
 from backend.upstream import validate_domain
 
-#: 界面默认的有效期。刻意**短于**根 CA：
-#: 叶子短、根长，叶子到期重签一次即可（客户端无感），
-#: 根 CA 只在最后换一次（客户端必须重装）。若两者等长，
-#: 到期那天会变成「根 CA 与全部叶子同时失效」的全局事故。
-DEFAULT_DAYS = 825
+#: 叶子证书默认有效期。根长叶短 —— 根 CA 30 年（见 rootca.DEFAULT_ROOT_DAYS），
+#: 叶子 10 年。叶子到期重签一次即可（客户端无感），
+#: 根 CA 换一次要动每一台客户端，故此生只换一次。
+DEFAULT_DAYS = 3650
 MAX_DAYS = 36500
 
 _SAN_SPLIT = re.compile(r"[\s,;]+")
 
 
 def parse_sans(raw):
-    """把界面上的附加域名文本拆成列表并去重。
+    """把附加域名解析成去重后的列表。
 
     逗号、空格、分号、换行都当分隔符 —— 用户从别处粘贴列表时格式不可控。
+    **列表入参同样接受**：换根时 SAN 是从原证书读回来的，手上本就是列表；
+    只认字符串会把 `['a.com']` 连同方括号引号一起当成域名，直接校验失败。
+
     拆分是安全的：每一段随后都要过 validate_domain，
     能通过校验的字符串里不可能再含换行或 shell 元字符。
     """
     if not raw:
         return []
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        chunks = []
+        for item in raw:
+            chunks.extend(_SAN_SPLIT.split(str(item)))
+    else:
+        chunks = _SAN_SPLIT.split(str(raw).strip())
+
     out, seen = [], set()
-    for part in _SAN_SPLIT.split(str(raw).strip()):
+    for part in chunks:
+        part = part.strip()
         if not part or part in seen:
             continue
         seen.add(part)
@@ -58,7 +68,7 @@ def parse_sans(raw):
     return out
 
 
-def _parse_days(days):
+def parse_days(days):
     """严格取整数天数。
 
     `'3650'` 与 `3650` 都接受；`'1.5'`/`1.5`/`True` 一律拒绝 ——
@@ -86,7 +96,7 @@ def validate_cert_request(cn, sans, days):
     if str(cn).startswith("*."):
         return False, _WILDCARD_MSG, None
 
-    n = _parse_days(days)
+    n = parse_days(days)
     if n is None:
         return False, "有效期必须是整数天数", None
     if not 1 <= n <= MAX_DAYS:

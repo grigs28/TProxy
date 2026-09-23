@@ -25,6 +25,10 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("TPROXY_CERTS_DIR", str(tmp_path / "certs"))
     monkeypatch.setenv("TPROXY_LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setenv("TPROXY_PROXY_DIR", str(tmp_path / "proxy"))
+    # 必须显式指向临时目录 —— 不设就会落到默认的 NAS 发布目录，
+    # 测试会往生产用的分发目录里写根 CA
+    (tmp_path / "dist").mkdir()
+    monkeypatch.setenv("TPROXY_DIST_DIR", str(tmp_path / "dist"))
     monkeypatch.setenv("MANAGER_SECRET_KEY", "test-secret-key")
     app = create_app()
     app.config["TESTING"] = True
@@ -300,6 +304,40 @@ def test_cert_apply_rejects_bad_days(client):
     r = client.post("/api/certs/apply",
                     json={"domain": "a.example.com", "days": "abc"})
     assert r.get_json()["ok"] is False
+
+
+# ---- 更换根 CA ----
+
+def test_rootca_apply_requires_confirm_word(client):
+    """换根是全系统破坏性最强的操作，光有登录态不够。
+
+    确认词必须在**服务端**校验 —— 前端那个输入框只是提示，任何人都能绕过。
+    """
+    r = client.post("/api/rootca/apply", json={"days": 10950, "confirm": ""})
+    assert r.get_json()["ok"] is False
+    assert "REPLACE" in r.get_json()["msg"]
+
+    r = client.post("/api/rootca/apply", json={"days": 10950, "confirm": "yes"})
+    assert r.get_json()["ok"] is False
+
+
+def test_rootca_apply_requires_login(client):
+    with client.session_transaction() as sess:
+        sess.clear()
+    r = client.post("/api/rootca/apply", json={"days": 10950, "confirm": "REPLACE"})
+    assert r.status_code == 401
+
+
+def test_rootca_preview_rejects_empty_cert_dir(client):
+    """没有域名证书却换根，只会换来一个谁也用不上的新根。"""
+    r = client.post("/api/rootca/preview", json={"days": 10950})
+    assert r.get_json()["ok"] is False
+
+
+def test_certs_reports_root_default_days(client):
+    d = client.get("/api/certs").get_json()
+    assert d["root_default_days"] > d["default_days"], \
+        "根 CA 的默认有效期必须远长于叶子证书"
 
 
 def test_hitrate_lists_six_types(client):

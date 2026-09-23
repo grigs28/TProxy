@@ -230,6 +230,13 @@ function renderRootCa(rc) {
   const days = document.createElement("span");
   days.className = "days";
 
+  // 更换根 CA 的入口挂在这一条上 —— 它改的就是这条展示的东西
+  const swap = document.createElement("button");
+  swap.className = "btn danger";
+  swap.textContent = "更换";
+  swap.title = "生成新根 CA 并重签全部域名证书（所有客户端需重装根 CA）";
+  swap.addEventListener("click", openRootCaDialog);
+
   if (!rc) {
     wrap.className = "rootca bad";
     days.textContent = "全部客户端都无法验证";
@@ -244,18 +251,19 @@ function renderRootCa(rc) {
       why.textContent =
         "根 CA 一旦失效，所有域名的证书会同时失效，且每台客户端都要重新安装。" +
         "提前换：生成新根 CA → 重签全部域名证书 → 更新分发目录 → 客户端重跑脚本。";
-      wrap.append(label, cn, days, why);
+      wrap.append(label, cn, days, swap, why);
       box.appendChild(wrap);
       return;
     }
   }
-  wrap.append(label, cn, days);
+  wrap.append(label, cn, days, swap);
   box.appendChild(wrap);
 }
 
 function renderCerts(data) {
   certCache = data.certs || [];
   certDefaultDays = data.default_days || 3650;
+  if (data.root_default_days) rootCaDefaultDays = data.root_default_days;
   renderRootCa(data.root_ca);
 
   const box = $("cert-list");
@@ -302,6 +310,97 @@ function renderCerts(data) {
   }
   table.appendChild(tb);
   box.appendChild(table);
+}
+
+// ---- 更换根 CA ----
+// 全系统破坏性最强的一步。界面上做三件事降低误操作：
+//   1. 代价写在弹层顶部，不是折叠在某个说明里
+//   2. 必须先预览成功，才能进入确认环节 —— 逼人看到影响面
+//   3. 要求手输确认词；且服务端同样校验，前端这道只是提示
+let rootCaDefaultDays = 10950;
+let rootCaConfirmWord = "REPLACE";
+let rootCaPreviewed = false;
+
+function syncRootCaApply() {
+  $("rootca-apply-btn").disabled =
+    !rootCaPreviewed || $("rootca-confirm").value.trim() !== rootCaConfirmWord;
+}
+
+function openRootCaDialog() {
+  rootCaPreviewed = false;
+  $("rootca-days").value = rootCaDefaultDays;
+  $("rootca-word").textContent = rootCaConfirmWord;
+  $("rootca-confirm").value = "";
+  $("rootca-preview").innerHTML = "";
+  $("rootca-msg").textContent = "";
+  $("rootca-apply-btn").disabled = true;
+  $("rootca-dialog").showModal();
+}
+
+async function previewRootCa() {
+  const box = $("rootca-preview");
+  const msg = $("rootca-msg");
+  box.innerHTML = "";
+  msg.textContent = "";
+  rootCaPreviewed = false;
+  syncRootCaApply();
+
+  try {
+    const d = await postJSON("/api/rootca/preview",
+                             { days: $("rootca-days").value.trim() });
+    if (!d.ok) { msg.className = "msg err"; msg.textContent = d.msg; return; }
+
+    if (d.confirm_word) rootCaConfirmWord = d.confirm_word;
+    $("rootca-word").textContent = rootCaConfirmWord;
+
+    const wrap = document.createElement("div");
+    wrap.className = "changes";
+    for (const c of d.changes || []) {
+      const el = document.createElement("div");
+      el.className = "change";
+      const where = document.createElement("div");
+      where.className = "where";
+      where.textContent = `${c.file} · ${c.action}`;
+      const diff = document.createElement("div");
+      diff.className = "diff";
+      diff.textContent = c.diff;
+      const desc = document.createElement("div");
+      desc.className = "desc";
+      desc.textContent = c.desc;
+      el.append(where, diff, desc);
+      wrap.appendChild(el);
+    }
+    box.appendChild(wrap);
+
+    rootCaPreviewed = true;
+    syncRootCaApply();
+    if (d.note) { msg.className = "msg"; msg.textContent = d.note; }
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = `预览失败：${e.message}`;
+  }
+}
+
+async function applyRootCa() {
+  const msg = $("rootca-msg");
+  $("rootca-apply-btn").disabled = true;
+  msg.className = "msg";
+  msg.textContent = "正在生成新根 CA 并重签全部域名证书…";
+
+  try {
+    const d = await postJSON("/api/rootca/apply", {
+      days: $("rootca-days").value.trim(),
+      confirm: $("rootca-confirm").value.trim(),
+    });
+    if (!d.ok) { msg.className = "msg err"; msg.textContent = d.msg; }
+    else { msg.className = "msg ok"; msg.textContent = d.msg; }
+    rootCaPreviewed = false;
+    syncRootCaApply();
+    load();
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = `换根失败：${e.message}`;
+  }
 }
 
 // ---- 签发证书 ----
@@ -743,6 +842,17 @@ function bindEvents() {
   $("add-confd-btn").addEventListener("click", createConfd);
   $("confd-save").addEventListener("click", saveConfd);
   $("confd-cancel").addEventListener("click", () => $("confd-dialog").close());
+  // 更换根 CA
+  $("rootca-preview-btn").addEventListener("click", previewRootCa);
+  $("rootca-apply-btn").addEventListener("click", applyRootCa);
+  $("rootca-cancel").addEventListener("click", () => $("rootca-dialog").close());
+  $("rootca-confirm").addEventListener("input", syncRootCaApply);
+  // 有效期一改，上次的预览就作废 —— 逼人重新看一眼影响面
+  $("rootca-days").addEventListener("input", () => {
+    rootCaPreviewed = false;
+    $("rootca-preview").innerHTML = "";
+    syncRootCaApply();
+  });
   // 更新日志
   $("version").addEventListener("click", openChangelog);
   $("changelog-close").addEventListener("click", () => $("changelog-dialog").close());
