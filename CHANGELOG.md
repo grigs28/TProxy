@@ -12,6 +12,33 @@
 
 ---
 
+## [0.3.7] - 2026-09-24
+
+### 新增
+- 客户端脚本**检查 Docker 的 `registry-mirrors`**（`tp.client.sh` → 0.1.0）。
+  配了它的机器，Docker **优先走镜像站**，只有全部失效才回落到
+  `registry-1.docker.io` —— 而那个才是被劫持到本地缓存的域名。
+  **实测**：在一台配了 5 个镜像站的机器上拉镜像，
+  `.18` 的 registry 日志 206 → 206 行，一行都没增加；移除并重启 Docker 后
+  同样一次拉取 206 → 212 行
+- 范围说明：`registry-mirrors` **只作用于 Docker Hub**；
+  ghcr.io / quay.io / gcr.io / nvcr.io / mcr 不受影响，仍走本地缓存
+
+### 修复
+- `data-root` **只读不写**。它逐机不同，且改它会让 Docker 换个根目录找数据 ——
+  现有容器与镜像会全部「消失」。故检查会把它读出来报告，但任何情况下都不修改。
+  同理不整份覆盖 `daemon.json`，只做外科手术式的单项处理
+- JSON 非法时**拒绝改写**（宁可不动也不能写坏 —— 写坏了 Docker 起不来），
+  且非法 JSON 本身会作为问题报出来。原先解析失败返回空，
+  会被误当成「没有 mirrors、无需处理」而静默通过
+
+### 说明
+- 实测了 7 个常见国内镜像站，**只有 3 个可用**：
+  `docker.1ms.run`、`docker.m.daocloud.io`、`docker.imgdb.de`。
+  不可用的：`docker.1panel.live`（403）、`mirror.ccs.tencentyun.com`（无解析，
+  腾讯云内网专用）、`hub-mirror.c.163.com`（无 A 记录，已停用）、
+  `192.168.0.36`（机器活着但没跑 registry）
+
 ## [0.3.6] - 2026-09-23
 
 ### 新增
