@@ -100,8 +100,6 @@
   `enterprise.proxmox.com` 四个上游（PVE / Ceph / Debian 系 apt 源）
 - `os-repo.conf` 增加 `/by-hash/` 长缓存：Debian 的 apt 默认开启
   Acquire-By-Hash，元数据走按内容寻址路径，不可变、可长缓存
-
-### 变更
 - 叶子证书默认有效期改回 3650 天（原先一度设为 825 天）
 
 ## [0.2.9] - 2026-09-23
