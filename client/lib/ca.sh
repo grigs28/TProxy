@@ -81,20 +81,50 @@ _runtime_candidates() {
   done
 }
 
+# 追加标记**带上证书指纹**。
+# 只写固定字串的话，根 CA 一换就会误判「已装过」而跳过 —— 客户端继续拿着
+# 旧根，而 conda / miniconda 读的是自己的 ssl/cacert.pem、不读系统信任库，
+# 表现为「换根后 conda/pip 连不上」，且完全看不出是信任锚没换。
+_runtime_mark_for() {
+  local cert="$1" fp
+  fp=$(openssl x509 -in "$cert" -noout -fingerprint -sha256 2>/dev/null \
+       | sed 's/.*=//; s/://g')
+  printf '%s %s' "$_RUNTIME_MARK" "${fp:-unknown}"
+}
+
+# 去掉此前追加的 TProxy 块（标记行起、到文件末尾）。没有则原样返回。
+_runtime_strip() {
+  local f="$1" tmp
+  grep -qF "$_RUNTIME_MARK" "$f" 2>/dev/null || return 0
+  tmp=$(mktemp) || return 1
+  if ! awk -v mark="$_RUNTIME_MARK" 'index($0, mark) { exit } { print }' "$f" > "$tmp"; then
+    rm -f "$tmp"; return 1
+  fi
+  # 用 cat 覆盖而不是 mv：保留原文件的属主与 inode。
+  # 这些 bundle 常在 root 独占的目录里，mv 会把属主换掉。
+  cat "$tmp" > "$f" || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+  return 0
+}
+
 install_runtime_ca() {
   local cert="$1"
+  local mark
+  mark=$(_runtime_mark_for "$cert")
   local found=0
   local f
   while read -r f; do
     [[ -z "$f" ]] && continue
-    if grep -qF "$_RUNTIME_MARK" "$f" 2>/dev/null; then
-      echo "   $f 已含 TProxy CA，跳过"
+    if grep -qF "$mark" "$f" 2>/dev/null; then
+      echo "   $f 已是最新，跳过"
+    elif ! _runtime_strip "$f"; then
+      echo "   ⚠ $f 处理失败，跳过（请手工检查）"
     else
       {
-        printf '\n%s\n' "$_RUNTIME_MARK"
+        printf '\n%s\n' "$mark"
         cat "$cert"
       } >> "$f"
-      echo "   已追加到 $f"
+      echo "   已更新 $f"
     fi
     found=1
   done < <(_runtime_candidates)
@@ -110,12 +140,7 @@ remove_runtime_ca() {
     grep -qF "$_RUNTIME_MARK" "$f" 2>/dev/null || continue
     # 删掉「标记行及其后的证书块」：标记行之后到文件末尾即为追加内容
     # （追加时总是在末尾，且证书 PEM 内不含我们的标记行）
-    local tmp
-    tmp=$(mktemp)
-    awk -v mark="$_RUNTIME_MARK" '
-      index($0, mark) { exit }   # 遇到标记即停止输出，之后的全是追加内容
-      { print }
-    ' "$f" > "$tmp" && mv "$tmp" "$f"
+    _runtime_strip "$f" || { echo "   ⚠ $f 处理失败，跳过"; continue; }
     echo "   已从 $f 移除 TProxy CA"
     # 去掉可能残留的尾部空行
     sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$f" 2>/dev/null || true

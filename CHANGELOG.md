@@ -21,12 +21,27 @@
 - 换根后自动把新根 CA 发布到客户端分发目录
 
 ### 修复
+- **客户端脚本换根不彻底**（`tp.client.sh` → 0.0.3）。运行时自带的 CA 包
+  （conda / miniconda 的 `ssl/cacert.pem`，它们不读系统信任库）原先按
+  **固定标记串**判重，根 CA 一换就误判「已装过」而跳过 ——
+  客户端继续握着旧根，表现为「换根后 conda/pip 连不上」，
+  且完全看不出是信任锚没换。现标记带上证书指纹，并在追加前先移除旧块
 - **`gen-ca.sh` 改为原子替换**（安全）。旧版直接往 `ca/` 里写：
   `openssl genrsa -out tproxy-ca.key` 会立刻截断现有根私钥，
   一旦后续失败就既没有新根也没有旧根 —— 全部客户端与全部域名证书
   同时失效且无从恢复。现改为在工作目录生成后再 `mv` 落位
 - `parse_sans` 接受列表入参。换根时 SAN 从原证书读回是列表，
   只认字符串会把 `['a.com']` 连同方括号当域名，导致「所有域名重签失败」
+- `_add_server_name` 改为写进**每一段** server 块。原先只改第一段，
+  于是域名在 HTTPS 那段不匹配任何 server_name、请求落到 default_server
+  被 444 拒掉 —— 表现为「界面提示添加成功，但 https 用不了」
+- 同步脚本不再把 `ca/` 下的证书从开发机推向目标机，否则会**静默回退换根**
+
+### 变更
+- 新增 `deb.debian.org`、`security.debian.org`、`download.proxmox.com`、
+  `enterprise.proxmox.com` 四个上游（PVE / Ceph / Debian 系 apt 源）
+- `os-repo.conf` 增加 `/by-hash/` 长缓存：Debian 的 apt 默认开启
+  Acquire-By-Hash，元数据走按内容寻址路径，不可变、可长缓存
 
 ### 变更
 - 叶子证书默认有效期改回 3650 天（原先一度设为 825 天）
