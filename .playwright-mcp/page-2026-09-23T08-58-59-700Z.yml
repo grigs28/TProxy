@@ -1,0 +1,410 @@
+- generic [active] [ref=f1e1]:
+  - generic:
+    - dialog [ref=f1e2]:
+      - heading "更新日志" [level=3] [ref=f1e3]
+      - paragraph [ref=f1e4]:
+        - text: 版本号写在仓库根的
+        - code [ref=f1e5]: CHANGELOG.md
+        - text: 里，此处显示的就是该文件
+      - generic [ref=f1e6]:
+        - heading "更新日志" [level=2] [ref=f1e7]
+        - paragraph [ref=f1e8]:
+          - strong [ref=f1e9]: 本文件是版本号的唯一来源。
+          - text: 管理端顶栏显示的版本、
+          - code [ref=f1e10]: /api/status
+          - text: 返回的
+          - code [ref=f1e11]: version
+          - text: 、以及静态资源指纹，全部从下面第一条
+          - code [ref=f1e12]: "## [x.y.z]"
+          - text: 取。改版本号只改这一处。
+        - paragraph [ref=f1e13]:
+          - text: 版本号规则：三位十进制、
+          - strong [ref=f1e14]: 逐位逢十进位
+          - text: ，不跳号不回退。 详见
+          - code [ref=f1e15]: docs/stages/README.md
+          - text: 。 每个版本的完整阶段汇总在
+          - code [ref=f1e16]: docs/stages/
+          - text: 。
+        - paragraph [ref=f1e17]:
+          - text: 格式遵循
+          - link "Keep a Changelog" [ref=f1e18] [cursor=pointer]:
+            - /url: https://keepachangelog.com/zh-CN/1.1.0/
+          - text: 。 日期为该版本提交到
+          - code [ref=f1e19]: main
+          - text: 的日期。
+        - separator [ref=f1e20]
+        - heading "[0.3.0] - 2026-09-23" [level=3] [ref=f1e21]
+        - heading "新增" [level=4] [ref=f1e22]
+        - list [ref=f1e23]:
+          - listitem [ref=f1e24]:
+            - text: 界面可
+            - strong [ref=f1e25]: 更换根 CA
+            - text: ：生成新的根 CA 并自动重签全部域名证书
+          - listitem [ref=f1e26]:
+            - text: 根 CA 默认有效期由 10 年改为
+            - strong [ref=f1e27]: 30 年
+            - text: ，叶子证书保持 10 年。
+        - paragraph [ref=f1e28]: 根长叶短：叶子到期重签即可（客户端无感），根 CA 换一次要动每一台客户端
+        - list [ref=f1e29]:
+          - listitem [ref=f1e30]: 换根后自动把新根 CA 发布到客户端分发目录
+        - heading "修复" [level=4] [ref=f1e31]
+        - list [ref=f1e32]:
+          - listitem [ref=f1e33]:
+            - strong [ref=f1e34]: 客户端脚本换根不彻底
+            - text: （
+            - code [ref=f1e35]: tp.client.sh
+            - text: → 0.0.3）。运行时自带的 CA 包
+        - paragraph [ref=f1e36]:
+          - text: （conda / miniconda 的
+          - code [ref=f1e37]: ssl/cacert.pem
+          - text: ，它们不读系统信任库）原先按
+          - strong [ref=f1e38]: 固定标记串
+          - text: 判重，根 CA 一换就误判「已装过」而跳过 —— 客户端继续握着旧根，表现为「换根后 conda/pip 连不上」， 且完全看不出是信任锚没换。现标记带上证书指纹，并在追加前先移除旧块
+        - list [ref=f1e39]:
+          - listitem [ref=f1e40]:
+            - text: 客户端脚本同时修正运行时 CA 包的
+            - strong [ref=f1e41]: 权限
+            - text: 。conda 的 bundle 可能只剩
+        - paragraph [ref=f1e42]:
+          - text: root 可读（早先
+          - code [ref=f1e43]: remove
+          - text: 用
+          - code [ref=f1e44]: mktemp
+          - text: +
+          - code [ref=f1e45]: mv
+          - text: 落盘，把临时文件的 600 权限带了过去），于是普通用户跑 conda/pip 连自己的 CA 包都打不开， curl 只报 exit 77，信息里完全看不出是权限问题。 注意「内容已是最新」那条分支也必须修权限 —— 一台机器只要曾经对过一次， 之后每次跑都走那条分支，不修就永远好不了
+        - list [ref=f1e46]:
+          - listitem [ref=f1e47]:
+            - strong [ref=f1e48]:
+              - code [ref=f1e49]: gen-ca.sh
+              - text: 改为原子替换
+            - text: （安全）。旧版直接往
+            - code [ref=f1e50]: ca/
+            - text: 里写：
+        - paragraph [ref=f1e51]:
+          - code [ref=f1e52]: openssl genrsa -out tproxy-ca.key
+          - text: 会立刻截断现有根私钥， 一旦后续失败就既没有新根也没有旧根 —— 全部客户端与全部域名证书 同时失效且无从恢复。现改为在工作目录生成后再
+          - code [ref=f1e53]: mv
+          - text: 落位
+        - list [ref=f1e54]:
+          - listitem [ref=f1e55]:
+            - code [ref=f1e56]: parse_sans
+            - text: 接受列表入参。换根时 SAN 从原证书读回是列表，
+        - paragraph [ref=f1e57]:
+          - text: 只认字符串会把
+          - code [ref=f1e58]: "['a.com']"
+          - text: 连同方括号当域名，导致「所有域名重签失败」
+        - list [ref=f1e59]:
+          - listitem [ref=f1e60]:
+            - code [ref=f1e61]: _add_server_name
+            - text: 改为写进
+            - strong [ref=f1e62]: 每一段
+            - text: server 块。原先只改第一段，
+        - paragraph [ref=f1e63]: 于是域名在 HTTPS 那段不匹配任何 server_name、请求落到 default_server 被 444 拒掉 —— 表现为「界面提示添加成功，但 https 用不了」
+        - list [ref=f1e64]:
+          - listitem [ref=f1e65]:
+            - text: 同步脚本不再把
+            - code [ref=f1e66]: ca/
+            - text: 下的证书从开发机推向目标机，否则会
+            - strong [ref=f1e67]: 静默回退换根
+        - heading "变更" [level=4] [ref=f1e68]
+        - list [ref=f1e69]:
+          - listitem [ref=f1e70]:
+            - text: 新增
+            - code [ref=f1e71]: deb.debian.org
+            - text: 、
+            - code [ref=f1e72]: security.debian.org
+            - text: 、
+            - code [ref=f1e73]: download.proxmox.com
+            - text: 、
+        - paragraph [ref=f1e74]:
+          - code [ref=f1e75]: enterprise.proxmox.com
+          - text: 四个上游（PVE / Ceph / Debian 系 apt 源）
+        - list [ref=f1e76]:
+          - listitem [ref=f1e77]:
+            - code [ref=f1e78]: os-repo.conf
+            - text: 增加
+            - code [ref=f1e79]: /by-hash/
+            - text: 长缓存：Debian 的 apt 默认开启
+        - paragraph [ref=f1e80]: Acquire-By-Hash，元数据走按内容寻址路径，不可变、可长缓存
+        - heading "变更" [level=4] [ref=f1e81]
+        - list [ref=f1e82]:
+          - listitem [ref=f1e83]: 叶子证书默认有效期改回 3650 天（原先一度设为 825 天）
+        - heading "[0.2.9] - 2026-09-23" [level=3] [ref=f1e84]
+        - heading "新增" [level=4] [ref=f1e85]
+        - list [ref=f1e86]:
+          - listitem [ref=f1e87]:
+            - strong [ref=f1e88]:
+              - code [ref=f1e89]: CHANGELOG.md
+              - text: 成为版本号的唯一来源
+            - text: 。界面顶栏、
+            - code [ref=f1e90]: /api/status
+            - text: 的
+            - code [ref=f1e91]: version
+        - paragraph [ref=f1e92]:
+          - text: 都从本文件第一条
+          - code [ref=f1e93]: "## [x.y.z]"
+          - text: 取，改版本号只需改这一处； 此前版本号写在
+          - code [ref=f1e94]: manager/version.py
+          - text: 里，与文档各记一份，必然会分叉
+        - list [ref=f1e95]:
+          - listitem [ref=f1e96]:
+            - text: 界面
+            - strong [ref=f1e97]: 点顶栏版本号可查看本文件
+            - text: ，按 Markdown 渲染（原生 JS 实现，
+        - paragraph [ref=f1e98]: 不引第三方库；先整体转义再套标记，链接只放行 http/https）
+        - heading "[0.2.8] - 2026-09-23" [level=3] [ref=f1e99]
+        - heading "新增" [level=4] [ref=f1e100]
+        - list [ref=f1e101]:
+          - listitem [ref=f1e102]:
+            - text: 管理界面可
+            - strong [ref=f1e103]: 签发与重新签发域名证书
+            - text: ：支持附加域名（SAN）与自定义有效期，
+        - paragraph [ref=f1e104]:
+          - text: 并自动登记进
+          - code [ref=f1e105]: ca/domains.txt
+          - text: ，供根 CA 重建时重签
+        - list [ref=f1e106]:
+          - listitem [ref=f1e107]:
+            - text: 界面单独展示
+            - strong [ref=f1e108]: 根 CA
+            - text: 到期情况。此前它不在证书列表里，而它的失效会让
+        - paragraph [ref=f1e109]: 所有域名同时失效、且每台客户端都必须重装 —— 最要命的那张反而看不见
+        - list [ref=f1e110]:
+          - listitem [ref=f1e111]:
+            - text: 新增域名默认签
+            - strong [ref=f1e112]: 825 天
+            - text: 而非 3650 天。根长叶短：叶子到期重签即可
+        - paragraph [ref=f1e113]: （客户端无感），根 CA 只在最后换一次（客户端必须重装）
+        - list [ref=f1e114]:
+          - listitem [ref=f1e115]:
+            - strong [ref=f1e116]: 静态资源指纹自动计算
+            - text: ：
+            - code [ref=f1e117]: index.html
+            - text: 里的
+            - code [ref=f1e118]: app.js?v=
+            - text: 不再手写
+        - heading "修复" [level=4] [ref=f1e119]
+        - list [ref=f1e120]:
+          - listitem [ref=f1e121]:
+            - strong [ref=f1e122]:
+              - code [ref=f1e123]: gen-cert.sh
+              - text: 改为原子替换
+            - text: （安全）。旧版直接往
+            - code [ref=f1e124]: certs/
+            - text: 里写：
+        - paragraph [ref=f1e125]:
+          - code [ref=f1e126]: openssl genrsa -out
+          - text: 立刻截断旧私钥，
+          - code [ref=f1e127]: openssl x509 -req -out
+          - text: 在报错
+          - strong [ref=f1e128]: 之前
+          - text: 就把旧证书清成 0 字节。即一次失败的重新签发会让该域名的
+          - code [ref=f1e129]: .crt
+          - text: 与
+          - code [ref=f1e130]: .key
+          - text: 双双变空、HTTPS 彻底失效，而现场看不出是签发失败造成的。 现改为在工作目录签好后
+          - code [ref=f1e131]: mv
+          - text: 落位，失败时
+          - code [ref=f1e132]: certs/
+          - text: 一个字节不动。
+        - list [ref=f1e133]:
+          - listitem [ref=f1e134]: 证书有效期不得超过根 CA 剩余期。超过不会报错，只会得到一张
+        - paragraph [ref=f1e135]: 「界面显示还有很多天、实际从根 CA 过期起就不被信任」的证书
+        - list [ref=f1e136]:
+          - listitem [ref=f1e137]: 前端缓存失效不再依赖人工改版本号 —— 此前忘了改的后果是浏览器一直跑
+        - paragraph [ref=f1e138]: 缓存的旧脚本，现象却是「新功能没生效」
+        - heading "变更" [level=4] [ref=f1e139]
+        - list [ref=f1e140]:
+          - listitem [ref=f1e141]:
+            - code [ref=f1e142]: ca/domains.txt
+            - text: 支持一行多域名（首个为 CN，其余为 SAN），
+        - paragraph [ref=f1e143]:
+          - code [ref=f1e144]: proxy/deploy.sh
+          - text: 的签发循环同步适配
+        - heading "[0.2.7] - 2026-09-23" [level=3] [ref=f1e145]
+        - heading "新增" [level=4] [ref=f1e146]
+        - list [ref=f1e147]:
+          - listitem [ref=f1e148]:
+            - text: 管理端接入
+            - strong [ref=f1e149]: yz-login 单点登录
+            - text: ，且只放行管理员账号。
+        - paragraph [ref=f1e150]: 此前管理端没有任何认证，只能靠绑回环地址保护
+        - list [ref=f1e151]:
+          - listitem [ref=f1e152]:
+            - text: 界面可
+            - strong [ref=f1e153]: 新增上游
+            - text: ：一次完成 DNS 劫持 + 签发证书 + tengine 分流三处联动
+        - paragraph [ref=f1e154]: （漏任何一处都不报错，只是静默不生效）
+        - list [ref=f1e155]:
+          - listitem [ref=f1e156]:
+            - text: 界面可
+            - strong [ref=f1e157]: 编辑与新建分流配置
+            - text: （
+            - code [ref=f1e158]: tengine/conf.d/*.conf
+            - text: ）
+          - listitem [ref=f1e159]:
+            - text: 客户端分发版
+            - code [ref=f1e160]: tp.client.sh
+            - text: ：自包含，供脚本分发平台使用
+        - heading "修复" [level=4] [ref=f1e161]
+        - list [ref=f1e162]:
+          - listitem [ref=f1e163]:
+            - text: 带
+            - code [ref=f1e164]: ticket
+            - text: 的回调请求被登录拦截器提前拦掉，导致 SSO 无限重定向
+          - listitem [ref=f1e165]:
+            - text: 修复分发版两处问题：
+            - code [ref=f1e166]: dig
+            - text: 包名因发行版而异、CA 轮换不生效
+        - heading "变更" [level=4] [ref=f1e167]
+        - list [ref=f1e168]:
+          - listitem [ref=f1e169]: 顶栏显示版本号、登录人、退出入口；整体提高文字对比度、字号加一号
+          - listitem [ref=f1e170]: 劫持规则与证书列表加滚动条
+        - heading "[0.2.6] - 2026-09-23" [level=3] [ref=f1e171]
+        - heading "新增" [level=4] [ref=f1e172]
+        - list [ref=f1e173]:
+          - listitem [ref=f1e174]:
+            - text: 缓存
+            - strong [ref=f1e175]: 命中率统计
+            - text: （解析 nginx 日志的
+            - code [ref=f1e176]: cache=HIT/MISS
+            - text: ），
+        - paragraph [ref=f1e177]: 回答「缓存到底有没有在起作用」—— 这正是本项目最初的痛点
+        - heading "[0.2.5] - 2026-09-23" [level=3] [ref=f1e178]
+        - heading "新增" [level=4] [ref=f1e179]
+        - list [ref=f1e180]:
+          - listitem [ref=f1e181]:
+            - text: 管理界面容器化与总验收（
+            - strong [ref=f1e182]: 阶段 8 完成
+            - text: ）
+        - heading "修复" [level=4] [ref=f1e183]
+        - list [ref=f1e184]:
+          - listitem [ref=f1e185]: 缓存目录路径映射错误导致 4/6 类被误报为「未启用/空」
+        - paragraph [ref=f1e186]: （含 os 缓存已有 75MB 数据却显示未启用）
+        - heading "[0.2.4] - 2026-09-23" [level=3] [ref=f1e187]
+        - heading "新增" [level=4] [ref=f1e188]
+        - list [ref=f1e189]:
+          - listitem [ref=f1e190]: 管理界面前端：缓存总览 / 劫持规则 / 证书 / 分流入口
+        - heading "[0.2.3] - 2026-09-23" [level=3] [ref=f1e191]
+        - heading "新增" [level=4] [ref=f1e192]
+        - list [ref=f1e193]:
+          - listitem [ref=f1e194]: Flask 应用与 API
+        - heading "[0.2.2] - 2026-09-23" [level=3] [ref=f1e195]
+        - heading "新增" [level=4] [ref=f1e196]
+        - list [ref=f1e197]:
+          - listitem [ref=f1e198]: 证书清单与到期检查
+        - heading "[0.2.1] - 2026-09-23" [level=3] [ref=f1e199]
+        - heading "新增" [level=4] [ref=f1e200]
+        - list [ref=f1e201]:
+          - listitem [ref=f1e202]: 缓存占用统计
+        - heading "[0.2.0] - 2026-09-23" [level=3] [ref=f1e203]
+        - heading "新增" [level=4] [ref=f1e204]
+        - list [ref=f1e205]:
+          - listitem [ref=f1e206]: 管理界面骨架与 nginx / dnsmasq 配置只读解析
+        - heading "[0.1.9] - 2026-09-23" [level=3] [ref=f1e207]
+        - heading "新增" [level=4] [ref=f1e208]
+        - list [ref=f1e209]:
+          - listitem [ref=f1e210]:
+            - text: 客户端接入文档（
+            - strong [ref=f1e211]: 阶段 7 完成
+            - text: ）
+        - heading "修复" [level=4] [ref=f1e212]
+        - list [ref=f1e213]:
+          - listitem [ref=f1e214]:
+            - text: 实机验证发现的 4 个配置缺陷；三个核心库文件曾被
+            - code [ref=f1e215]: .gitignore
+            - text: 规则吞掉
+        - heading "[0.1.8] - 2026-09-23" [level=3] [ref=f1e216]
+        - heading "新增" [level=4] [ref=f1e217]
+        - list [ref=f1e218]:
+          - listitem [ref=f1e219]: 客户端主脚本与实机验证
+        - heading "[0.1.7] - 2026-09-23" [level=3] [ref=f1e220]
+        - heading "新增" [level=4] [ref=f1e221]
+        - list [ref=f1e222]:
+          - listitem [ref=f1e223]: 客户端根 CA 安装（系统信任库 + Docker + Java + 运行时工具各自的自有库）
+        - heading "[0.1.6] - 2026-09-23" [level=3] [ref=f1e224]
+        - heading "新增" [level=4] [ref=f1e225]
+        - list [ref=f1e226]:
+          - listitem [ref=f1e227]:
+            - text: 客户端 DNS 配置（含
+            - code [ref=f1e228]: systemd-resolved
+            - text: 并行查询会绕过劫持的处理）
+        - heading "[0.1.5] - 2026-09-23" [level=3] [ref=f1e229]
+        - heading "新增" [level=4] [ref=f1e230]
+        - list [ref=f1e231]:
+          - listitem [ref=f1e232]: 客户端接入脚本骨架，含发行版与 DNS 机制检测
+        - heading "[0.1.4] - 2026-09-23" [level=3] [ref=f1e233]
+        - heading "新增" [level=4] [ref=f1e234]
+        - list [ref=f1e235]:
+          - listitem [ref=f1e236]:
+            - text: 六类缓存总验收（
+            - strong [ref=f1e237]: 阶段 3-6 完成
+            - text: ）
+        - heading "修复" [level=4] [ref=f1e238]
+        - list [ref=f1e239]:
+          - listitem [ref=f1e240]: git push 被错误路由进缓存（改为直连）
+          - listitem [ref=f1e241]: 私有仓库经共享缓存无认证开放（改为带凭据流量直连）
+          - listitem [ref=f1e242]: 内容协商串味；补齐无缓存收益的劫持域名
+        - heading "[0.1.3] - 2026-09-23" [level=3] [ref=f1e243]
+        - heading "新增" [level=4] [ref=f1e244]
+        - list [ref=f1e245]:
+          - listitem [ref=f1e246]: Java (Maven) 缓存。元数据与 SNAPSHOT 明确不缓存
+        - heading "[0.1.2] - 2026-09-23" [level=3] [ref=f1e247]
+        - heading "新增" [level=4] [ref=f1e248]
+        - list [ref=f1e249]:
+          - listitem [ref=f1e250]:
+            - text: Node.js (npm) 缓存（处理 gzip 元数据与
+            - code [ref=f1e251]: Set-Cookie
+            - text: ）
+        - heading "[0.1.1] - 2026-09-23" [level=3] [ref=f1e252]
+        - heading "新增" [level=4] [ref=f1e253]
+        - list [ref=f1e254]:
+          - listitem [ref=f1e255]: Python (PyPI) 缓存（索引短 TTL / 包文件长 TTL）
+        - heading "[0.1.0] - 2026-09-23" [level=3] [ref=f1e256]
+        - heading "新增" [level=4] [ref=f1e257]
+        - list [ref=f1e258]:
+          - listitem [ref=f1e259]: git 仓库缓存（gitcache）
+        - heading "[0.0.9] - 2026-09-23" [level=3] [ref=f1e260]
+        - heading "新增" [level=4] [ref=f1e261]
+        - list [ref=f1e262]:
+          - listitem [ref=f1e263]: Docker 镜像缓存（registry:2，六个上游实例）
+        - heading "[0.0.8] - 2026-09-23" [level=3] [ref=f1e264]
+        - heading "新增" [level=4] [ref=f1e265]
+        - list [ref=f1e266]:
+          - listitem [ref=f1e267]:
+            - text: 验收与运维文档（
+            - strong [ref=f1e268]: 阶段 1-2 完成
+            - text: ）
+        - heading "[0.0.7] - 2026-09-23" [level=3] [ref=f1e269]
+        - heading "修复" [level=4] [ref=f1e270]
+        - list [ref=f1e271]:
+          - listitem [ref=f1e272]: 一键部署与健康检查修复
+        - heading "[0.0.6] - 2026-09-23" [level=3] [ref=f1e273]
+        - heading "新增" [level=4] [ref=f1e274]
+        - list [ref=f1e275]:
+          - listitem [ref=f1e276]: 缓存行为与 302 验证
+        - heading "[0.0.5] - 2026-09-23" [level=3] [ref=f1e277]
+        - heading "新增" [level=4] [ref=f1e278]
+        - list [ref=f1e279]:
+          - listitem [ref=f1e280]: HTTPS 终结（TLS MITM）与按 SNI 取证书
+        - heading "[0.0.4] - 2026-09-23" [level=3] [ref=f1e281]
+        - heading "新增" [level=4] [ref=f1e282]
+        - list [ref=f1e283]:
+          - listitem [ref=f1e284]: tengine 与 HTTP 分流
+        - heading "[0.0.3] - 2026-09-23" [level=3] [ref=f1e285]
+        - heading "新增" [level=4] [ref=f1e286]
+        - list [ref=f1e287]:
+          - listitem [ref=f1e288]: 自建根 CA 与域名证书签发
+        - heading "[0.0.2] - 2026-09-23" [level=3] [ref=f1e289]
+        - heading "新增" [level=4] [ref=f1e290]
+        - list [ref=f1e291]:
+          - listitem [ref=f1e292]: dnsmasq 域名劫持
+        - heading "[0.0.1] - 2026-09-23" [level=3] [ref=f1e293]
+        - heading "新增" [level=4] [ref=f1e294]
+        - list [ref=f1e295]:
+          - listitem [ref=f1e296]: 项目骨架与配置参数
+    - dialog [ref=f1e297]:
+      - heading "编辑 os-repo.conf" [level=3] [ref=f1e298]
+      - paragraph [ref=f1e299]: 容器内没有 nginx，无法做真正的语法校验 —— 只检查了花括号配对。
+      - textbox [ref=f1e301]: "# proxy/tengine/conf.d/os-repo.conf # 系统包仓库缓存 —— HTTP 源（Ubuntu / CentOS 及国内镜像站） proxy_cache os_cache; proxy_cache_key \"$scheme$host$request_uri\"; proxy_cache_lock on; proxy_cache_background_update on; proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504; proxy_cache_valid 404 1m; add_header X-Cache-Status $upstream_cache_status always; server { listen 80; server_name archive.ubuntu.com security.ubuntu.com cn.archive.ubuntu.com ports.ubuntu.com mirror.centos.org mirrorlist.centos.org dl.fedoraproject.org mirrors.fedoraproject.org mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn mirrors.ustc.edu.cn mirrors.huaweicloud.com; access_log /var/log/nginx/os-repo.log main; # 元数据：短 TTL —— 缓存过久会让客户端看不到新发布的包 location ~* /(repodata/.*\\.(xml|gz|zst)$|Packages(\\.(gz|xz|zst|lz4))?$|Contents.*\\.(gz|xz|zst)$|Release(\\.gpg)?$|InRelease$) { proxy_cache_valid 200 302 10m; proxy_pass $scheme://$host$request_uri; proxy_set_header Host $host; proxy_redirect off; } # 制品：长 TTL —— 内容寻址，文件名含版本，永不改变。 # /by-hash/ 是 Debian 系元数据的按内容寻址路径（/by-hash/SHA256/<哈希>）， # 同样不可变。不加这条它会落到下面 30m 的默认规则上 —— # Debian 的 apt 默认开启 Acquire-By-Hash，每次更新都要回源重取 # 几十个元数据分片，缓存等于只起了三成作用。 location ~* (\\.(rpm|deb|dsc|tar\\.(gz|xz|bz2)|zst)$|/by-hash/) { proxy_cache_valid 200 302 365d; proxy_pass $scheme://$host$request_uri; proxy_set_header Host $host; proxy_redirect off; } # 其余（目录索引等） location / { proxy_cache_valid 200 302 30m; proxy_pass $scheme://$host$request_uri; proxy_set_header Host $host; proxy_redirect off; } } # ---- HTTPS 系统包仓库（TLS 终结 / MITM）---- # 按 SNI 动态选取证书：域名可枚举，预签发的证书文件名即域名，无需动态签发组件。 server { listen 443 ssl; http2 on; server_name repo.openeuler.org mirrors.openeuler.org dl-cdn.openeuler.openatom.cn security.ubuntu.com mirrors.aliyun.com; ssl_certificate /etc/nginx/certs/$ssl_server_name.crt; ssl_certificate_key /etc/nginx/certs/$ssl_server_name.key; ssl_protocols TLSv1.2 TLSv1.3; access_log /var/log/nginx/os-repo-ssl.log main; # server 级可用的代理指令（注意 proxy_pass 只能在 location 内） proxy_cache os_cache; proxy_cache_key \"$scheme$host$request_uri\"; proxy_cache_lock on; proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504; proxy_set_header Host $host; proxy_ssl_server_name on; proxy_redirect off; # 元数据：短 TTL location ~* /(repodata/.*\\.(xml|gz|zst)$|Packages(\\.(gz|xz|zst|lz4))?$|Contents.*\\.(gz|xz|zst)$|Release(\\.gpg)?$|InRelease$) { proxy_cache_valid 200 302 10m; proxy_pass https://$host$request_uri; } # 制品：长 TTL location ~* (\\.(rpm|deb|dsc|tar\\.(gz|xz|bz2)|zst)$|/by-hash/) { proxy_cache_valid 200 302 365d; proxy_pass https://$host$request_uri; } location / { proxy_cache_valid 200 302 30m; proxy_pass https://$host$request_uri; } } # ---- 兜底：未匹配任何 server_name 的请求 ---- # 这个块是必需的：否则未知 Host（如健康检查用的 127.0.0.1）会落到第一个 # server 块，而它的 proxy_pass $scheme://$host 会把请求代回代理自身 # （$host 解析为 127.0.0.1），形成死循环 —— 健康检查的超时正是由此产生。 server { listen 80 default_server; server_name _; access_log /var/log/nginx/default.log main; location = /healthz { access_log off; return 200 \"ok\\n\"; } # 供客户端下载根 CA —— client-setup.sh 默认请求此路径。 # 客户端访问的是 IP（Host: 192.168.0.18），不会匹配任何 server_name， # 因此必须放在 default_server 里，否则会被下面的 444 拒掉。 location = /tproxy-ca.crt { alias /usr/share/nginx/tproxy-ca.crt; default_type application/x-x509-ca-cert; } location / { return 444; # 直接关闭连接，不做任何代理 } }"

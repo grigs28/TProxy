@@ -749,7 +749,6 @@ async function openChangelog() {
     }
     // renderMarkdown 先转义再套标记，故这里赋 innerHTML 是安全的
     body.innerHTML = renderMarkdown(d.markdown);
-    $("changelog-title").textContent = "更新日志";
   } catch (e) {
     body.innerHTML = "";
     body.appendChild(emptyBox(`读取失败：${e.message}`));

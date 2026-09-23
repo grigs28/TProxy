@@ -25,6 +25,12 @@
     --warn:    #fbbf24;
     --bad:     #f87171;
 
+    /* 标识符/代码的底色。原先复用 --raise，而它与弹层底色 --surface
+       只差 1.06:1 —— 看上去像块脏点，不像有意标出来的记号。
+       本界面里标识符密度极高（域名、文件名、参数、版本号），
+       它们必须一眼可辨，故单独给一个色。 */
+    --code-bg: #26313f;
+
     --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
     --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 
@@ -318,13 +324,16 @@
     gap: 32px;
   }
 
+  /* 标识符：正文色 + 明确的底色。
+     用 --muted 会让它与周围正文混成一片「灰上加灰」，
+     而这些词正是要看清的东西。 */
   code {
     font-family: var(--mono);
     font-size: 14.5px;
-    background: var(--raise);
+    background: var(--code-bg);
     padding: 1px 5px;
     border-radius: 3px;
-    color: var(--muted);
+    color: var(--text);
   }
 
   a { color: var(--accent); }
@@ -360,6 +369,9 @@
     padding: 22px;
   }
   dialog::backdrop { background: rgba(0,0,0,.6); }
+  /* 展示文件内容的弹层放宽一些：640px 下 nginx 配置几乎每行都要折行，
+     折行后的配置很难读，也容易看错层级。 */
+  dialog.wide { max-width: 820px; }
   dialog h3 { margin: 0 0 6px; font-size: 17px; }
   dialog .hint { color: var(--faint); font-size: 14px; margin: 0 0 16px; }
   .field { margin-bottom: 14px; }
@@ -370,7 +382,16 @@
     border: 1px solid var(--border); border-radius: 3px;
     padding: 7px 9px;
   }
-  .field textarea { font-family: var(--mono); font-size: 14px; min-height: 300px; resize: vertical; }
+  /* 编辑配置文件 —— 本界面里最需要逐字读的地方。
+     字号与行距都比别处大：nginx 配置符号密集，
+     行距不够时很容易看串行，而看串行的代价是改错生产配置。 */
+  .field textarea {
+    font-family: var(--mono);
+    font-size: 15px;
+    line-height: 1.65;
+    min-height: 46vh;
+    resize: vertical;
+  }
   .field input:focus, .field select:focus, .field textarea:focus {
     outline: none; border-color: var(--accent);
   }
@@ -382,7 +403,10 @@
   /* ---- 更新日志（渲染后的 Markdown）----
    页面的全局 h2 是「区块标题」样式（大写、带一条横线），
    日志里的 h2 是「版本号」，语义不同，必须在这里覆盖掉。 */
-.md { font-size: 14.5px; line-height: 1.75; max-height: 62vh; }
+/* 更新日志是「要逐字读」的东西：里面全是文件名、命令、版本号。
+   所以这里的正文比页面正文还大一档 —— 界面上可以小的是标签，
+   不能小的是内容。 */
+.md { font-size: 15.5px; line-height: 1.8; max-height: 64vh; }
 .md > :first-child { margin-top: 0; }
 .md h2, .md h3, .md h4, .md h5 {
   display: block;
@@ -392,27 +416,32 @@
 }
 .md h2::after { display: none; }
 .md h2 { font-size: 18px; color: var(--text); margin-top: 0; }
-/* 版本条目（源文件里的 ## ）→ h3。每条之间一条分隔线，便于定位到某一版；
-   第一条不加，它上面已经有 <hr> 了。 */
+/* 版本条目（源文件里的 ## ）→ h3。用等宽体：版本号和日期是**数据**，
+   与顶栏那个版本徽标同一种字，扫视时能一眼认出「这是分节处」。
+   每条之间一条分隔线；第一条不加，它上面已经有 <hr> 了。 */
 .md h3 {
-  font-size: 16px;
+  font-family: var(--mono);
+  font-size: 17px;
   color: var(--text);
   padding-top: 16px;
   border-top: 1px solid var(--border);
 }
 .md h3:first-of-type { border-top: none; padding-top: 0; }
-.md h4, .md h5 { font-size: 14px; color: var(--muted); margin: 14px 0 6px; }
+/* 分类标题（新增 / 修复 / 变更）：是标签，比正文安静一档即可，
+   但不能比正文小 —— 它是这一节的入口。 */
+.md h4, .md h5 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 16px 0 6px;
+}
 .md p { margin: 8px 0; }
 .md ul { margin: 6px 0; padding-left: 20px; }
 .md li { margin: 4px 0; }
 .md hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .md strong { color: var(--text); font-weight: 600; }
-.md code {
-  background: var(--raise);
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 13.5px;
-}
+/* 日志里标识符密度极高，跟着正文一起放大一档，别让它比周围正文还小 */
+.md code { font-size: 14.5px; }
 
 /* ---- 改动预览 ---- */
   .changes { border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
@@ -506,7 +535,7 @@
 </dialog>
 
 <!-- 编辑分流配置 -->
-<dialog id="confd-dialog">
+<dialog id="confd-dialog" class="wide">
   <h3 id="confd-title">编辑分流配置</h3>
   <p class="hint">
     容器内没有 nginx，无法做真正的语法校验 —— 只检查了花括号配对。
@@ -577,8 +606,10 @@
 </dialog>
 
 <!-- 更新日志：点顶栏版本号打开 -->
-<dialog id="changelog-dialog">
-  <h3 id="changelog-title">更新日志</h3>
+<!-- 这里刻意没有自己的标题：文件本身第一行就是「# 更新日志」，
+     再放一个标题就成了同一个词连着出现两遍。
+     弹层的可访问名靠 aria-label 给。 -->
+<dialog id="changelog-dialog" class="wide" aria-label="更新日志">
   <p class="hint">
     版本号写在仓库根的 <code>CHANGELOG.md</code> 里，此处显示的就是该文件 ——
     界面顶栏的版本号也从它取，不存在两份各自维护的版本号。
