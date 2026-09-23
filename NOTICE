@@ -1,0 +1,64 @@
+TProxy
+======
+内网离线/加速代理站 —— 基于 dnsmasq + Tengine/nginx + Docker 的透明缓存系统
+
+Copyright (c) 2026 grigs28
+
+本文件记录项目使用的第三方组件、许可与重要变更。
+
+
+第三方组件
+----------
+
+| 组件 | 用途 | 许可 |
+|---|---|---|
+| dnsmasq | DNS 劫持与内网域名解析 | GPL-2.0 / GPL-3.0 |
+| nginx (Tengine) | 入口网关、TLS 终结、proxy_cache | BSD-2-Clause |
+| Docker / Docker Compose | 容器编排 | Apache-2.0 |
+| registry:2 (distribution) | Docker 镜像缓存代理 | Apache-2.0 |
+| gitcache (git-cloner/gitcache) | git 仓库缓存 | MIT |
+| Alpine Linux | dnsmasq 与 gitcache 的基础镜像 | MIT |
+| OpenSSL | 证书签发与验证 | Apache-2.0 |
+| Flask | 管理界面后端（计划 D） | BSD-3-Clause |
+
+
+安全须知
+--------
+
+本项目采用 TLS 中间人（MITM）方式实现 HTTPS 透明缓存，涉及自建根 CA：
+
+1. **根 CA 私钥（`proxy/ca/tproxy-ca.key`）绝不可泄露或提交入库。**
+   持有者可伪造任意网站证书。该文件已由 `.gitignore` 排除。
+
+2. **安装了根 CA 的客户端，其经代理的 HTTPS 流量可被解密。**
+   这是该方案的固有性质，部署前须确保符合所在组织的安全策略。
+
+3. 根 CA 私钥需纳入离线备份流程 —— 丢失将导致所有已接入客户端需重新安装 CA。
+
+
+变更记录
+--------
+
+### 2026-09-23
+
+**架构重建**（原 `generator` + `hosts-master.txt` 方案已废弃并移除）
+
+- 确立 DNS 透明劫持 + TLS 终结 + 分类缓存的架构，客户端零配置接入
+- 覆盖六类制品：系统包（dnf/yum/apt）、Docker、git、Python、Node.js、Java
+- 移除 Nexus（无 Java 构建需求，原占 2.7GB 内存且空转）
+- 清除旧 `v3-*` 容器、镜像、缓存数据（约 11.6GB）及 `sys-postgres`/`sys-redis`
+- 文档目录由 `doc/` 统一为 `docs/`
+
+**阶段 1-2**（计划 A，标签 `phase-1-2-core-proxy`）
+
+- dnsmasq 域名劫持 + 内网双 IP 解析 + 上游兜底
+- 自建根 CA 与域名证书签发
+- tengine 443 TLS 终结与系统包透明缓存
+
+**阶段 3-6**（计划 B，标签 `phase-3-6-cache-backends`）
+
+- Docker 镜像缓存（registry:2）
+- git 仓库缓存（gitcache）
+- Python / Node.js / Java 缓存
+
+详见 `docs/stages/` 目录的阶段汇总。
