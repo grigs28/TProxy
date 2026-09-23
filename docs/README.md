@@ -61,6 +61,21 @@ TProxy 项目的文档库：运行环境探查记录、方案调研，以及管�
 > ⚠️ `/opt/v3/` 下存在**已被取代的旧配置**，改配置前务必先确认挂载来源，详见
 > [known-issues.md](known-issues.md#4-新旧配置并存易改错文件)。
 
+## ⚠️ proxy-manager 现状（勿依赖）
+
+`proxy-manager/` 下的代码属**旧架构**（`generator` + `hosts-master.txt`）时代产物，
+其中若干模块**对新架构完全失效**：
+
+| 模块 | 问题 |
+|---|---|
+| `backend/monitor.py` | 硬编码旧日志路径 `/mnt/HDD/TProxy/logs/tengine/access.log`（新路径为容器内 `/var/log/nginx`）；且解析旧格式 `cache_status="HIT"`，新日志格式为 `cache=$upstream_cache_status` —— 一条都匹配不到 |
+| `backend/firewall.py` | 端口清单是 53/3128/5557/8080（旧架构），新架构需 80/443；且 DNS 需要 UDP 53 而该模块只开 TCP |
+
+**后果**：缓存统计等界面会显示为空 —— 属**静默假正常**，不会报错。
+
+**结论**：这些代码**不可用于新架构**。按 spec 决策 6，将于阶段 8 重新设计。
+在此之前请勿依赖其任何输出。
+
 ## 关于本目录
 
 本 `docs/` 目录位于 **`192.168.0.19:/opt/TProxy/`**（开发机），内容分三类：
