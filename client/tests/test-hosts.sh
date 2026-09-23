@@ -133,7 +133,7 @@ else
     echo "     dist: $_dist_domains"
     fail=1
 fi
-for fn in hosts_pinned_domains hosts_unpin; do
+for fn in hosts_pinned_domains hosts_unpin bypass_on bypass_off bypass_active; do
     if grep -q "^${fn}()" "$DIR/lib/dns.sh" && grep -q "^${fn}()" "$DIR/dist/tp.client.sh"; then
         echo "  ✅ 两份都有 $fn"
     else
@@ -141,6 +141,72 @@ for fn in hosts_pinned_domains hosts_unpin; do
         fail=1
     fi
 done
+
+echo "== 直连模式：写入 / 撤销 =="
+# 用途：.18 不可用时把劫持域名钉到源站 —— 否则每次 DNS 查询都要先等 .18
+# 超时（2 秒）才落到公网 DNS。属于应急，不是长期方案。
+B="$T/bypass"
+printf '127.0.0.1 localhost\n185.199.108.133 raw.githubusercontent.com\n' > "$B"
+
+bypass_on "$B" >/dev/null
+if grep -qF "$BYPASS_BEGIN" "$B" && grep -qF "$BYPASS_END" "$B"; then
+    echo "  ✅ 写入带标记"
+else
+    echo "  ❌ 没写标记，事后无法整体撤销"
+    fail=1
+fi
+n=$(sed -n "/$BYPASS_BEGIN/,/$BYPASS_END/p" "$B" | grep -cE '^[0-9]')
+if [[ "$n" -eq "${#DIRECT_HOSTS[@]}" ]]; then
+    echo "  ✅ 写入 ${n} 条源站记录"
+else
+    echo "  ❌ 记录数不对（期望 ${#DIRECT_HOSTS[@]}，实际 $n）"
+    fail=1
+fi
+if grep -q "140.82.116.3" "$B" && grep -q "151.101.0.223" "$B"; then
+    echo "  ✅ 含 github 与 pypi 的源站 IP"
+else
+    echo "  ❌ 缺少关键源站 IP"
+    fail=1
+fi
+
+# 直连模式本身就是「/etc/hosts 覆盖劫持域名」，所以判断函数必须能认出它 ——
+# 这样重新接入时才能自动改回走代理
+if hosts_pinned_domains "$B" | grep -qx "github.com"; then
+    echo "  ✅ 能被 hosts_pinned_domains 认出（重新接入会改回走代理）"
+else
+    echo "  ❌ 认不出来，重新接入时清不掉"
+    fail=1
+fi
+
+bypass_off "$B" >/dev/null
+if grep -qF "$BYPASS_BEGIN" "$B"; then
+    echo "  ❌ 撤销后标记还在"
+    fail=1
+else
+    echo "  ✅ 标记已清除"
+fi
+if grep -q "140.82.116.3" "$B"; then
+    echo "  ❌ 撤销后源站 IP 还在"
+    fail=1
+else
+    echo "  ✅ 源站记录已清除"
+fi
+if grep -q "127.0.0.1 localhost" "$B" && grep -q "raw.githubusercontent.com" "$B"; then
+    echo "  ✅ 原有记录未受影响"
+else
+    echo "  ❌ 误伤了原有记录"
+    fail=1
+fi
+
+echo "== 撤销后再撤销应是安全的（幂等）=="
+before=$(md5sum "$B" | cut -d' ' -f1)
+bypass_off "$B" >/dev/null
+if [[ "$before" == "$(md5sum "$B" | cut -d' ' -f1)" ]]; then
+    echo "  ✅ 重复撤销不动文件"
+else
+    echo "  ❌ 重复撤销改了文件"
+    fail=1
+fi
 
 rm -rf "$T"
 if [[ $fail -eq 0 ]]; then echo "HOSTS-PASS"; else echo "HOSTS-FAIL"; fi

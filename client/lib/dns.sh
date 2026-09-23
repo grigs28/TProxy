@@ -28,6 +28,76 @@ HIJACK_DOMAINS=(
   github.com
 )
 
+# ---- 直连模式（应急）----
+#
+# 用途：.18 不可用时，把劫持域名钉到**源站**，机器照常上网。
+# 不这么做的话，每次 DNS 查询都要先等 .18 超时（resolv.conf 里配的 2 秒）
+# 才会落到公网 DNS —— 能通，但每个请求都慢一拍。
+#
+# ⚠️ 这是应急手段，不是长期配置：这些 IP 属于 CDN / 云厂商，会变
+#    （实测 github.com 的 A 记录在几个月内就换过）。而且钉住之后，
+#    那几个域名就**再也不走缓存**了 —— 恢复正常后请及时 --no-bypass。
+#
+# 数据来源：2026-09-23 用两个公网 DNS（223.5.5.5 / 119.29.29.29）实测，
+# 两者结果一致，并与线上资料交叉核对过。github.com 给两个 IP：
+# 140.82.116.3 是 GitHub 自有网络（西雅图），20.205.243.166 走 Azure 新加坡 ——
+# 后者在境内延迟更好，且实测已稳定服务两年。
+DIRECT_HOSTS=(
+  "49.0.229.41        repo.openeuler.org"
+  "49.0.230.196       mirrors.openeuler.org"
+  "100.30.41.220      registry-1.docker.io"
+  "104.18.43.178      auth.docker.io"
+  "151.101.0.223      pypi.org"
+  "151.101.0.223      files.pythonhosted.org"
+  "104.16.0.34        registry.npmjs.org"
+  "104.18.18.12       repo1.maven.org"
+  "140.82.116.3       github.com"
+  "20.205.243.166     github.com"
+)
+
+# 成对标记：撤销时按标记整体摘掉，不会误伤手工加的记录
+BYPASS_BEGIN="# >>> TProxy 直连模式（应急，--no-bypass 撤销）"
+BYPASS_END="# <<< TProxy 直连模式"
+
+# 开启直连模式。幂等：已开启则重写这一块（便于更新 IP）。
+bypass_on() {
+  local f="${1:-/etc/hosts}" entry
+  bypass_off "$f"                       # 先摘掉旧的，避免叠加
+
+  {
+    printf '\n%s\n' "$BYPASS_BEGIN"
+    for entry in "${DIRECT_HOSTS[@]}"; do
+      printf '%s\n' "$entry"
+    done
+    printf '%s\n' "$BYPASS_END"
+  } >> "$f" || return 1
+  return 0
+}
+
+# 撤销直连模式。没有开启时一个字节都不动。
+bypass_off() {
+  local f="${1:-/etc/hosts}" tmp
+  grep -qF "$BYPASS_BEGIN" "$f" 2>/dev/null || return 0
+
+  tmp=$(mktemp) || return 1
+  if ! awk -v b="$BYPASS_BEGIN" -v e="$BYPASS_END" '
+        index($0, b) { skip = 1; next }
+        index($0, e) { skip = 0; next }
+        !skip { print }
+      ' "$f" > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"; return 1
+  fi
+  # 用 cat 覆盖而非 mv：保住原文件的属主与 inode
+  cat "$tmp" > "$f" || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+  return 0
+}
+
+# 当前是否处于直连模式
+bypass_active() {
+  grep -qF "$BYPASS_BEGIN" "${1:-/etc/hosts}" 2>/dev/null
+}
+
 # ---- /etc/hosts 覆盖检查 ----
 #
 # 为什么必须查：/etc/nsswitch.conf 里 `hosts: files dns ...` —— **files 排在 dns 之前**，
@@ -192,6 +262,12 @@ configure_dns() {
   # 配好 DNS 还不够：/etc/hosts 里的记录会把它整个压过去
   # （nsswitch 里 files 排在 dns 之前），而 dig 看不到这一点。
   # 不查的话这台机器看起来接入成功，实际劫持一个都没生效。
+  # 直连模式是「我们自己写的 hosts 覆盖」，先整体摘掉再走常规流程
+  if bypass_active; then
+    echo "⚠ /etc/hosts 处于【直连模式】（应急用），将改回走代理"
+    bypass_off && echo "  已撤销直连模式"
+  fi
+
   local pinned d
   pinned=$(hosts_pinned_domains)
   if [[ -z "$pinned" ]]; then
