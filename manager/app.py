@@ -9,17 +9,18 @@
 import os
 import secrets
 
-from flask import (Flask, jsonify, redirect, request, send_from_directory,
-                   session, url_for)
+from flask import (Flask, jsonify, make_response, redirect, request,
+                   send_from_directory, session, url_for)
 
 from backend import sso
 from backend.cache_stats import all_cache_usage
-from backend.certs import list_certs
+from backend.certmgr import DEFAULT_DAYS, preview_sign, sign_cert
+from backend.certs import list_certs, root_ca_info
 from backend.config_read import parse_dnsmasq_rules, parse_nginx_servers
 from backend.hitrate import all_hitrate
 from backend.confd import add_conf, list_confs, read_conf, write_conf
 from backend.upstream import CATEGORIES, apply_upstream, preview_upstream
-from version import get_version
+from version import asset_version, get_version
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -83,6 +84,9 @@ def create_app():
 
     def cfg(key):
         return os.environ.get(key, DEFAULTS[key])
+
+    def ca_dir():
+        return os.path.join(cfg("TPROXY_PROXY_DIR"), "ca")
 
     def sso_redirect():
         """直接跳 yz-login，不再经本地 /login 中转一次。"""
@@ -157,6 +161,17 @@ def create_app():
         return jsonify({"status": "ok"})
 
     # ---- 页面与 API ----
+    def render_index():
+        """把静态资源指纹注入 index.html。
+
+        做成替换而非让人手改 `?v=`：忘改的后果是浏览器一直跑旧 app.js，
+        而现象是「新功能没生效」—— 几乎没人会往缓存上想。
+        每次请求都读盘：文件很小，且容器重建后就该拿到最新内容。
+        """
+        with open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        return html.replace("__ASSET_V__", asset_version())
+
     @app.route("/")
     def index():
         # 兼容两种回调配置：若 yz-login 中该应用的 URL 配成首页而非 /callback，
@@ -165,13 +180,19 @@ def create_app():
         ticket = request.args.get("ticket")
         if ticket and not session.get("user"):
             return callback()
-        return send_from_directory(STATIC_DIR, "index.html")
+        resp = make_response(render_index())
+        # index.html 自己不能被浏览器缓存：它内部带着静态资源的指纹，
+        # 它被缓存住指纹就跟着一起过期，整套自动失效也就白做了。
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
 
     @app.route("/api/status")
     def status():
         return jsonify({
             "status": "ok",
             "version": get_version(),
+            # 构建指纹：不升阶段版本号也能分辨「部署的是不是新版」
+            "build": asset_version(),
             "user": session.get("user"),
         })
 
@@ -188,7 +209,28 @@ def create_app():
 
     @app.route("/api/certs")
     def certs():
-        return jsonify({"certs": list_certs(cfg("TPROXY_CERTS_DIR"))})
+        return jsonify({
+            "certs": list_certs(cfg("TPROXY_CERTS_DIR")),
+            # 根 CA 单独返回：它的失效方式与域名证书完全不同 ——
+            # 域名证书过期只影响一个域名，根 CA 到期会让所有域名同时失效，
+            # 且每台客户端都必须重新安装。dnsmasq 与 tengine 的界面都要能一眼看到它。
+            "root_ca": root_ca_info(ca_dir()),
+            "default_days": DEFAULT_DAYS,
+        })
+
+    # ---- 签发 / 重新签发域名证书 ----
+    # 会【写正在使用的证书文件】，故只走 POST，且依赖 before_request 的登录校验。
+    @app.route("/api/certs/preview", methods=["POST"])
+    def certs_preview():
+        d = request.get_json(silent=True) or {}
+        return jsonify(preview_sign(d.get("domain", ""), d.get("sans", ""),
+                                    d.get("days", DEFAULT_DAYS), ca_dir()))
+
+    @app.route("/api/certs/apply", methods=["POST"])
+    def certs_apply():
+        d = request.get_json(silent=True) or {}
+        return jsonify(sign_cert(d.get("domain", ""), d.get("sans", ""),
+                                 d.get("days", DEFAULT_DAYS), ca_dir()))
 
     @app.route("/api/hitrate")
     def hitrate():

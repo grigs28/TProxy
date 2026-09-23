@@ -4,6 +4,7 @@
 不触碰真实配置与缓存。
 """
 import os
+import subprocess
 
 import pytest
 
@@ -15,11 +16,15 @@ def client(monkeypatch, tmp_path):
     (tmp_path / "conf").mkdir()
     (tmp_path / "certs").mkdir()
     (tmp_path / "logs").mkdir()
+    # 签发/上游端点都要求显式注入配置根目录 —— 不注入会落到
+    # DEFAULTS 里的 /opt/TProxy/proxy，也就是**生产目录**
+    (tmp_path / "proxy" / "ca").mkdir(parents=True)
     monkeypatch.setenv("TPROXY_CACHE_BASE", str(tmp_path))
     monkeypatch.setenv("TPROXY_CONF_D", str(tmp_path / "conf"))
     monkeypatch.setenv("TPROXY_DNSMASQ_CONF", str(tmp_path / "dnsmasq.conf"))
     monkeypatch.setenv("TPROXY_CERTS_DIR", str(tmp_path / "certs"))
     monkeypatch.setenv("TPROXY_LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setenv("TPROXY_PROXY_DIR", str(tmp_path / "proxy"))
     monkeypatch.setenv("MANAGER_SECRET_KEY", "test-secret-key")
     app = create_app()
     app.config["TESTING"] = True
@@ -43,6 +48,78 @@ def test_status_reports_version_and_user(client):
     assert d["version"], "缺少版本号"
     assert d["version"].count(".") == 2, f"版本号格式异常: {d['version']}"
     assert d["user"]["display_name"] == "测试管理员"
+
+
+# ---- 静态资源版本：自动失效 ----
+# 人工改版本号这条链断过一次：改了 app.js 却忘了改 index.html 里的 ?v=，
+# 结果是浏览器一直跑旧脚本，现象却表现为「新功能没生效」。
+
+def test_status_reports_build_fingerprint(client):
+    d = client.get("/api/status").get_json()
+    assert d["build"], "缺少构建指纹 —— 界面无法分辨部署的是哪一版"
+
+
+def test_asset_version_tracks_content(tmp_path):
+    from version import asset_version
+    (tmp_path / "index.html").write_text("a")
+    (tmp_path / "app.js").write_text("b")
+
+    v1 = asset_version(str(tmp_path))
+    assert v1 == asset_version(str(tmp_path)), "同一内容应得到同一指纹"
+
+    (tmp_path / "app.js").write_text("c")
+    assert asset_version(str(tmp_path)) != v1, \
+        "内容变了指纹却没变 —— 浏览器会一直用缓存的旧脚本"
+
+
+def test_asset_version_covers_each_static_file(tmp_path):
+    """两个文件都要进指纹，漏一个就等于那个文件不会失效。"""
+    from version import asset_version
+    (tmp_path / "index.html").write_text("a")
+    (tmp_path / "app.js").write_text("b")
+    v1 = asset_version(str(tmp_path))
+
+    (tmp_path / "index.html").write_text("z")
+    assert asset_version(str(tmp_path)) != v1
+
+
+def test_asset_version_missing_files_does_not_crash(tmp_path):
+    """静态目录缺文件时仍要能算出一个指纹，而不是让整页 500。"""
+    from version import asset_version
+    assert asset_version(str(tmp_path))
+
+
+def test_index_substitutes_asset_version(client):
+    """占位符必须被替换掉。
+
+    漏替换的表现很有迷惑性：浏览器去请求 /static/app.js?v=__ASSET_V__，
+    匹配不上任何缓存键，但也没人会发现 —— 直到某次改动没生效。
+    """
+    html = client.get("/").get_data(as_text=True)
+    assert "__ASSET_V__" not in html, "占位符未被替换"
+    assert "app.js?v=" in html
+
+
+def test_index_references_current_asset_version(client):
+    """index.html 里带的指纹必须等于当前静态资源的指纹。
+
+    不等就意味着：内容变了、URL 没变 → 浏览器继续用旧的 app.js。
+    这条是「自动升级」真正要保证的不变量。
+    """
+    from version import asset_version
+    html = client.get("/").get_data(as_text=True)
+    assert f"app.js?v={asset_version()}" in html
+
+
+def test_index_is_not_cached_by_browser(client):
+    """index.html 本身不能被缓存。
+
+    它内部带着静态资源的指纹；它自己被缓存住，指纹也就跟着一起过期，
+    整套自动失效就白做了。
+    """
+    r = client.get("/")
+    assert "no-cache" in r.headers.get("Cache-Control", ""), \
+        f"Cache-Control: {r.headers.get('Cache-Control')}"
 
 
 def test_cache_lists_six_types(client):
@@ -78,6 +155,66 @@ def test_certs_empty_without_cert_files(client):
     r = client.get("/api/certs")
     assert r.status_code == 200
     assert r.get_json()["certs"] == []
+
+
+# ---- 证书：根 CA 与签发端点 ----
+
+def test_certs_reports_absent_root_ca(client):
+    """测试树里没有根 CA，接口要返回 null 而不是报错 —— 界面据此显示待补。"""
+    d = client.get("/api/certs").get_json()
+    assert "root_ca" in d
+    assert d["root_ca"] is None
+
+
+def test_certs_reports_root_ca_expiry(client, tmp_path):
+    """根 CA 必须出现在界面上。
+
+    它过期会让**所有**域名同时失效且所有客户端都要重装，
+    而此前列表只列 ca/certs/*.crt —— 最要命的那张反而看不见。
+    """
+    ca = tmp_path / "proxy" / "ca"
+    subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+         "-keyout", str(ca / "tproxy-ca.key"),
+         "-out", str(ca / "tproxy-ca.crt"),
+         "-days", "1000", "-subj", "/CN=TProxy Root CA"],
+        check=True, capture_output=True)
+
+    d = client.get("/api/certs").get_json()
+    assert d["root_ca"] is not None
+    assert 998 <= d["root_ca"]["days_left"] <= 1000
+    assert d["root_ca"]["expiring_soon"] is False
+
+
+def test_certs_reports_default_days(client):
+    """界面用它预填有效期，故必须由后端给出而不是前端写死。"""
+    d = client.get("/api/certs").get_json()
+    assert isinstance(d["default_days"], int)
+    assert d["default_days"] > 0
+
+
+def test_cert_preview_requires_login(client):
+    """签发端点写生产文件，绝不能匿名可用。"""
+    with client.session_transaction() as sess:
+        sess.clear()
+    r = client.post("/api/certs/preview",
+                    json={"domain": "a.example.com", "days": 30})
+    assert r.status_code == 401
+
+
+def test_cert_preview_rejects_injection(client):
+    """域名会拼进配置文件与 openssl 参数，校验必须在服务端做。"""
+    r = client.post("/api/certs/preview",
+                    json={"domain": "a.example.com\naddress=/evil/1.1.1.1",
+                          "days": 30})
+    assert r.status_code == 200
+    assert r.get_json()["ok"] is False
+
+
+def test_cert_apply_rejects_bad_days(client):
+    r = client.post("/api/certs/apply",
+                    json={"domain": "a.example.com", "days": "abc"})
+    assert r.get_json()["ok"] is False
 
 
 def test_hitrate_lists_six_types(client):

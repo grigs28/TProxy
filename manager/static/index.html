@@ -221,6 +221,45 @@
     z-index: 1;
   }
 
+  /* ---- 根 CA 条 ----
+     它单独占一行而不是混进下面的表：域名证书过期只影响一个域名，
+     根 CA 过期会让所有域名同时失效、且每台客户端都要重装。
+     两者的紧急程度不在一个量级，视觉上也不该并排。 */
+  .rootca {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 9px 12px;
+    margin-bottom: 12px;
+    font-size: 14px;
+  }
+  .rootca .label {
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .rootca .cn { font-family: var(--mono); color: var(--text); }
+  .rootca .days {
+    margin-left: auto;
+    font-family: var(--mono);
+    color: var(--muted);
+  }
+  .rootca .why {
+    flex-basis: 100%;
+    color: var(--faint);
+    font-size: 12.5px;
+    margin-top: 2px;
+  }
+  .rootca.warn { border-left-color: var(--warn); }
+  .rootca.warn .days { color: var(--warn); }
+  .rootca.bad  { border-left-color: var(--bad); }
+  .rootca.bad  .days { color: var(--bad); }
+
   /* ---- 表格 ---- */
   table {
     width: 100%;
@@ -381,7 +420,10 @@
 
   <div class="cols">
     <section>
-      <h2>证书 <span class="count" id="cert-count"></span></h2>
+      <h2>证书 <span class="count" id="cert-count"></span>
+        <button class="btn" id="add-cert-btn">+ 签发</button>
+      </h2>
+      <div id="root-ca"></div>
       <div id="cert-list" class="scroll"><div class="loading">读取中…</div></div>
     </section>
 
@@ -432,8 +474,37 @@
   <div class="msg" id="confd-msg"></div>
 </dialog>
 
-<!-- 带版本号做缓存失效：改动前端后升 version.py 的版本即可让客户端拉到新版，
-     否则浏览器会一直用缓存的旧 app.js -->
-<script src="/static/app.js?v=0.2.7"></script>
+<!-- 签发 / 重新签发域名证书 -->
+<dialog id="cert-dialog">
+  <h3 id="cert-title">签发证书</h3>
+  <p class="hint">
+    用内网根 CA 自签的域名证书。重新签发会换掉证书与私钥，但根 CA 不变 ——
+    客户端只信任根 CA，所以不必给任何客户端重新分发。
+  </p>
+  <div class="field">
+    <label for="cert-domain">域名</label>
+    <input id="cert-domain" placeholder="repo.example.org" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="field">
+    <label for="cert-sans">附加域名（可选，逗号或空格分隔）</label>
+    <input id="cert-sans" placeholder="cdn.example.org www.example.org" autocomplete="off" spellcheck="false">
+  </div>
+  <div class="field">
+    <label for="cert-days">有效期（天）</label>
+    <input id="cert-days" type="number" min="1" step="1">
+  </div>
+  <div id="cert-preview"></div>
+  <div class="actions">
+    <button class="btn" id="cert-cancel">取消</button>
+    <button class="btn" id="cert-preview-btn">预览改动</button>
+    <button class="btn primary" id="cert-apply-btn" disabled>确认签发</button>
+  </div>
+  <div class="msg" id="cert-msg"></div>
+</dialog>
+
+<!-- __ASSET_V__ 由后端替换为静态资源的内容指纹（见 version.asset_version）。
+     不写死版本号是刻意的：写死就得靠人记得改，忘了的后果是浏览器一直用
+     缓存的旧 app.js，而现象表现为「新功能没生效」。 -->
+<script src="/static/app.js?v=__ASSET_V__"></script>
 </body>
 </html>

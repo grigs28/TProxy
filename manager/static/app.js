@@ -208,9 +208,59 @@ function renderRules(data) {
 }
 
 // ---- 证书 ----
-function renderCerts(certs) {
+let certCache = [];
+let certDefaultDays = 3650;
+let editingCertDomain = "";
+
+// 根 CA 单列：它和域名证书的失效后果差一个量级，混在同一张表里会被当成
+// 「第 37 张证书」，而它其实决定了全部证书还作不作数。
+function renderRootCa(rc) {
+  const box = $("root-ca");
+  box.innerHTML = "";
+
+  const wrap = document.createElement("div");
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = "根 CA";
+
+  const cn = document.createElement("span");
+  cn.className = "mono";
+  cn.textContent = rc ? rc.cn : "未找到 tproxy-ca.crt";
+
+  const days = document.createElement("span");
+  days.className = "days";
+
+  if (!rc) {
+    wrap.className = "rootca bad";
+    days.textContent = "全部客户端都无法验证";
+  } else {
+    wrap.className = "rootca " +
+      (rc.expired ? "bad" : rc.expiring_soon ? "warn" : "");
+    days.textContent = rc.expired ? "已过期" : `剩余 ${rc.days_left} 天`;
+    // 只在需要动手时才解释后果 —— 平时这行字是噪音
+    if (rc.expired || rc.expiring_soon) {
+      const why = document.createElement("div");
+      why.className = "why";
+      why.textContent =
+        "根 CA 一旦失效，所有域名的证书会同时失效，且每台客户端都要重新安装。" +
+        "提前换：生成新根 CA → 重签全部域名证书 → 更新分发目录 → 客户端重跑脚本。";
+      wrap.append(label, cn, days, why);
+      box.appendChild(wrap);
+      return;
+    }
+  }
+  wrap.append(label, cn, days);
+  box.appendChild(wrap);
+}
+
+function renderCerts(data) {
+  certCache = data.certs || [];
+  certDefaultDays = data.default_days || 3650;
+  renderRootCa(data.root_ca);
+
   const box = $("cert-list");
   box.innerHTML = "";
+  const certs = certCache;
   $("cert-count").textContent = certs.length ? `${certs.length} 张` : "";
 
   if (!certs.length) {
@@ -221,21 +271,127 @@ function renderCerts(certs) {
   // 最紧急的排在前面：运维关心的是「哪个快过期了」
   const sorted = [...certs].sort((a, b) => a.days_left - b.days_left);
   const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>域名</th><th>剩余</th></tr></thead>";
+  table.innerHTML =
+    "<thead><tr><th>域名</th><th>剩余</th><th></th></tr></thead>";
   const tb = document.createElement("tbody");
   for (const c of sorted) {
     const tr = document.createElement("tr");
+
     const td1 = document.createElement("td");
     td1.className = "mono";
     td1.textContent = c.domain;
+    // 附加域名不占列，放进 tooltip —— 列表要的是密度，不是完整信息
+    const extra = (c.sans || []).filter((s) => s !== c.domain);
+    td1.title = extra.length ? `附加域名: ${extra.join(", ")}` : "无附加域名";
+
     const td2 = document.createElement("td");
-    td2.className = "mono " + (c.expired ? "bad" : c.expiring_soon ? "warn" : "muted");
+    td2.className = "mono " +
+      (c.expired ? "bad" : c.expiring_soon ? "warn" : "muted");
     td2.textContent = c.expired ? "已过期" : `${c.days_left} 天`;
-    tr.append(td1, td2);
+
+    const td3 = document.createElement("td");
+    td3.style.textAlign = "right";
+    const btn = document.createElement("button");
+    btn.className = "btn";
+    btn.textContent = "编辑";
+    btn.addEventListener("click", () => openCertDialog(c.domain));
+    td3.appendChild(btn);
+
+    tr.append(td1, td2, td3);
     tb.appendChild(tr);
   }
   table.appendChild(tb);
   box.appendChild(table);
+}
+
+// ---- 签发证书 ----
+// 同一个弹层兼作「新增」与「编辑」：编辑就是拿现有证书的 SAN 与有效期
+// 预填后再签一次，二者只有预填值不同。
+function openCertDialog(domain) {
+  const dlg = $("cert-dialog");
+  const c = domain ? certCache.find((x) => x.domain === domain) : null;
+  editingCertDomain = c ? c.domain : "";
+
+  $("cert-title").textContent = c ? `重新签发 ${c.domain}` : "签发证书";
+  $("cert-domain").value = c ? c.domain : "";
+  // 域名是这个弹层的身份，改了就变成另一张证书 —— 改名请走「+ 签发」
+  $("cert-domain").disabled = !!c;
+  $("cert-sans").value = c
+    ? (c.sans || []).filter((s) => s !== c.domain).join(" ")
+    : "";
+  $("cert-days").value = (c && c.total_days) ? c.total_days : certDefaultDays;
+
+  $("cert-preview").innerHTML = "";
+  $("cert-msg").textContent = "";
+  $("cert-apply-btn").disabled = true;
+  dlg.showModal();
+}
+
+function certPayload() {
+  return {
+    domain: $("cert-domain").value.trim(),
+    sans: $("cert-sans").value.trim(),
+    days: $("cert-days").value.trim(),
+  };
+}
+
+async function previewCert() {
+  const box = $("cert-preview");
+  const msg = $("cert-msg");
+  box.innerHTML = "";
+  msg.textContent = "";
+  $("cert-apply-btn").disabled = true;
+
+  const p = certPayload();
+  if (!p.domain) { msg.className = "msg err"; msg.textContent = "请填写域名"; return; }
+
+  try {
+    const d = await postJSON("/api/certs/preview", p);
+    if (!d.ok) { msg.className = "msg err"; msg.textContent = d.msg; return; }
+
+    const wrap = document.createElement("div");
+    wrap.className = "changes";
+    for (const c of d.changes || []) {
+      const el = document.createElement("div");
+      el.className = "change";
+      const where = document.createElement("div");
+      where.className = "where";
+      where.textContent = `${c.file} · ${c.action}`;
+      const diff = document.createElement("div");
+      diff.className = "diff";
+      diff.textContent = c.diff;
+      const desc = document.createElement("div");
+      desc.className = "desc";
+      desc.textContent = c.desc;
+      el.append(where, diff, desc);
+      wrap.appendChild(el);
+    }
+    box.appendChild(wrap);
+    $("cert-apply-btn").disabled = false;
+    if (d.note) { msg.className = "msg"; msg.textContent = d.note; }
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = `预览失败：${e.message}`;
+  }
+}
+
+async function applyCert() {
+  const msg = $("cert-msg");
+  $("cert-apply-btn").disabled = true;
+  msg.className = "msg";
+  msg.textContent = "签发中…（生成 2048 位密钥，需数秒）";
+
+  try {
+    const d = await postJSON("/api/certs/apply", certPayload());
+    if (!d.ok) { msg.className = "msg err"; msg.textContent = d.msg; return; }
+    msg.className = "msg ok";
+    msg.textContent = d.msg + (d.restart_hint ? `　生效需执行：${d.restart_hint}` : "");
+    load();
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = `签发失败：${e.message}`;
+    $("cert-apply-btn").disabled = false;
+  }
 }
 
 // ---- 分流入口 ----
@@ -410,6 +566,7 @@ async function createConfd() {
 }
 
 const ALL_BOXES = ["cache-list", "hit-list", "rule-list", "cert-list", "server-list"];
+const ALL_EXTRA_BOXES = ["root-ca"];
 
 function setHealth(ok, text) {
   $("health-dot").className = "dot " + (ok ? "ok" : "bad");
@@ -418,6 +575,9 @@ function setHealth(ok, text) {
 
 function renderHeader(st) {
   if (st.version) $("version").textContent = "v" + st.version;
+  // 构建指纹放进 tooltip：平时不占地方，但要确认「部署的是不是新版」
+  // 时它就在那儿 —— 阶段版本号不变也能分辨。
+  if (st.build) $("version").title = `构建 ${st.build}`;
 
   const u = st.user || {};
   const name = u.display_name || u.username || "";
@@ -437,7 +597,7 @@ async function load() {
     setHealth(false, "管理端无响应");
     // 必须给各区块填上明确原因 —— 否则它们会永远停在「读取中…」，
     // 与「空态写明原因」的规则相悖
-    for (const id of ALL_BOXES) {
+    for (const id of ALL_BOXES.concat(ALL_EXTRA_BOXES)) {
       $(id).innerHTML = "";
       $(id).appendChild(emptyBox("管理端无响应"));
     }
@@ -449,7 +609,7 @@ async function load() {
     ["/api/cache", "cache-list", (d) => renderCache(d.types || [])],
     ["/api/hitrate", "hit-list", (d) => renderHitrate(d.hitrate || [])],
     ["/api/rules", "rule-list", renderRules],
-    ["/api/certs", "cert-list", (d) => renderCerts(d.certs || [])],
+    ["/api/certs", "cert-list", (d) => renderCerts(d)],
   ];
   for (const [path, boxId, fn] of jobs) {
     try {
@@ -491,6 +651,18 @@ function bindEvents() {
   $("add-confd-btn").addEventListener("click", createConfd);
   $("confd-save").addEventListener("click", saveConfd);
   $("confd-cancel").addEventListener("click", () => $("confd-dialog").close());
+  // 证书
+  $("add-cert-btn").addEventListener("click", () => openCertDialog(""));
+  $("cert-preview-btn").addEventListener("click", previewCert);
+  $("cert-apply-btn").addEventListener("click", applyCert);
+  $("cert-cancel").addEventListener("click", () => $("cert-dialog").close());
+  // 表单一改就作废上次预览 —— 避免「预览的是 A、提交的是 B」
+  for (const id of ["cert-domain", "cert-sans", "cert-days"]) {
+    $(id).addEventListener("input", () => {
+      $("cert-apply-btn").disabled = true;
+      $("cert-preview").innerHTML = "";
+    });
+  }
 }
 
 bindEvents();

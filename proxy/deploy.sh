@@ -23,9 +23,11 @@ echo "== 3/6 检查证书 =="
 if [[ ! -f ca/tproxy-ca.crt ]]; then
   echo "   根 CA 不存在，正在生成..."
   ( cd ca && ./gen-ca.sh )
-  while read -r d; do
-    [[ -z "$d" || "$d" == \#* ]] && continue
-    ( cd ca && ./gen-cert.sh "$d" )
+  # 一行可含多个域名：首个是 CN，其余进 SAN —— 与管理界面登记时的格式一致。
+  # 若不认这种行，界面上签的带附加域名的证书在根 CA 重建后会丢掉 SAN。
+  while read -r -a line; do
+    if [[ ${#line[@]} -eq 0 || "${line[0]}" == \#* ]]; then continue; fi
+    ( cd ca && ./gen-cert.sh "${line[@]}" )
   done < ca/domains.txt
 fi
 echo "   证书文件数: $(ls ca/certs/*.crt 2>/dev/null | wc -l)"
