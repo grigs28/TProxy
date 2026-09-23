@@ -65,3 +65,20 @@ services:
     dns:
       - 223.5.5.5
       - 223.6.6.6
+
+  # git 仓库缓存。本地构建（Go 编译），首次 up 需数分钟。
+  # 监听 127.0.0.1:4999，只对 tengine 暴露。
+  gitcache:
+    build:
+      context: ./gitcache
+      dockerfile: Dockerfile
+    image: tproxy/gitcache:local
+    container_name: v3-gitcache
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ${CACHE_BASE}/git:/var/gitcache
+    command: ["-b", "/var/gitcache", "-p", "4999"]
+    dns:
+      - 223.5.5.5
+      - 223.6.6.6
