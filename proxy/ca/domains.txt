@@ -33,3 +33,7 @@ mcr.microsoft.com
 github.com
 gitlab.com
 gitee.com
+# Python
+pypi.org
+files.pythonhosted.org
+pypi.tuna.tsinghua.edu.cn
