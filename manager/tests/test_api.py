@@ -37,6 +37,14 @@ def test_status_ok(client):
     assert r.get_json()["status"] == "ok"
 
 
+def test_status_reports_version_and_user(client):
+    """界面顶栏要显示版本号与登录人名，二者都由该接口提供。"""
+    d = client.get("/api/status").get_json()
+    assert d["version"], "缺少版本号"
+    assert d["version"].count(".") == 2, f"版本号格式异常: {d['version']}"
+    assert d["user"]["display_name"] == "测试管理员"
+
+
 def test_cache_lists_six_types(client):
     r = client.get("/api/cache")
     assert r.status_code == 200

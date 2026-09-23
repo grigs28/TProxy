@@ -254,19 +254,41 @@ function renderServers(servers) {
   box.appendChild(table);
 }
 
+const ALL_BOXES = ["cache-list", "hit-list", "rule-list", "cert-list", "server-list"];
+
 function setHealth(ok, text) {
   $("health-dot").className = "dot " + (ok ? "ok" : "bad");
   $("health-text").textContent = text;
 }
 
+function renderHeader(st) {
+  if (st.version) $("version").textContent = "v" + st.version;
+
+  const u = st.user || {};
+  const name = u.display_name || u.username || "";
+  if (name) {
+    $("user-name").textContent = name;
+    $("host-sep").hidden = false;
+    $("logout-link").hidden = false;
+  }
+}
+
 async function load() {
+  let st;
   try {
-    await getJSON("/api/status");
+    st = await getJSON("/api/status");
     setHealth(true, "管理端正常");
   } catch (e) {
     setHealth(false, "管理端无响应");
+    // 必须给各区块填上明确原因 —— 否则它们会永远停在「读取中…」，
+    // 与「空态写明原因」的规则相悖
+    for (const id of ALL_BOXES) {
+      $(id).innerHTML = "";
+      $(id).appendChild(emptyBox("管理端无响应"));
+    }
     return;
   }
+  renderHeader(st);
 
   const jobs = [
     ["/api/cache", "cache-list", (d) => renderCache(d.types || [])],

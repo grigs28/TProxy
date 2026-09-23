@@ -17,6 +17,7 @@ from backend.cache_stats import all_cache_usage
 from backend.certs import list_certs
 from backend.config_read import parse_dnsmasq_rules, parse_nginx_servers
 from backend.hitrate import all_hitrate
+from version import get_version
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -164,7 +165,11 @@ def create_app():
 
     @app.route("/api/status")
     def status():
-        return jsonify({"status": "ok", "user": session.get("user")})
+        return jsonify({
+            "status": "ok",
+            "version": get_version(),
+            "user": session.get("user"),
+        })
 
     @app.route("/api/cache")
     def cache():
