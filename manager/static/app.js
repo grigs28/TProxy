@@ -80,6 +80,80 @@ function renderCache(types) {
   }
 }
 
+// ---- 缓存命中率 ----
+// 回答「缓存到底有没有在起作用」——这正是本项目最初的痛点：
+// 旧系统崩溃 1.7 万次、缓存长期为零，却因「看不见」而无人察觉。
+function renderHitrate(rows) {
+  const box = $("hit-list");
+  box.innerHTML = "";
+
+  const judged = rows.filter((r) => r.rate !== null);
+  $("hit-count").textContent = judged.length
+    ? `${judged.length} 类有数据`
+    : "";
+
+  if (!rows.length) {
+    box.appendChild(emptyBox("未读取到日志目录"));
+    return;
+  }
+
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  thead.innerHTML =
+    "<tr><th>类型</th><th>命中率</th><th>命中</th><th>回源</th><th>不适用</th></tr>";
+  table.appendChild(thead);
+
+  const tb = document.createElement("tbody");
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+
+    const td1 = document.createElement("td");
+    td1.className = "mono";
+    td1.textContent = TYPE_LABEL[r.type] || r.type;
+
+    const td2 = document.createElement("td");
+    td2.className = "mono";
+    if (r.backend_cached) {
+      // registry/git 的缓存在各自后端，tengine 日志无标记 ——
+      // 必须明确说明，而不是显示 0% 让人以为缓存失效
+      td2.className = "mono muted";
+      td2.textContent = "后端自缓存";
+      td2.title = "该类型的缓存由 registry:2 / gitcache 各自管理，nginx 层不参与";
+      tr.append(td1, td2);
+      for (let i = 0; i < 3; i++) tr.appendChild(document.createElement("td"));
+      tb.appendChild(tr);
+      continue;
+    }
+
+    if (r.rate === null) {
+      td2.className = "mono muted";
+      td2.textContent = "无数据";
+      td2.title = "该类的日志中没有命中记录（可能尚无流量）";
+    } else {
+      // 命中率染色：低于 50% 值得注意，低于 20% 明显异常
+      td2.className = "mono " + (r.rate >= 50 ? "" : r.rate >= 20 ? "warn" : "bad");
+      td2.textContent = `${r.rate}%`;
+    }
+
+    const mk = (v, cls) => {
+      const td = document.createElement("td");
+      td.className = "mono " + (cls || "muted");
+      td.textContent = v;
+      return td;
+    };
+    tr.append(
+      td1,
+      td2,
+      mk(r.hit),
+      mk(r.miss),
+      mk(r.uncached || 0)
+    );
+    tb.appendChild(tr);
+  }
+  table.appendChild(tb);
+  box.appendChild(table);
+}
+
 // ---- 劫持规则 ----
 // 用「域名 → 目标」的映射对呈现，直接体现「劫持」语义。
 function renderRules(data) {
@@ -195,18 +269,18 @@ async function load() {
   }
 
   const jobs = [
-    ["/api/cache", (d) => renderCache(d.types || [])],
-    ["/api/rules", renderRules],
-    ["/api/certs", (d) => renderCerts(d.certs || [])],
+    ["/api/cache", "cache-list", (d) => renderCache(d.types || [])],
+    ["/api/hitrate", "hit-list", (d) => renderHitrate(d.hitrate || [])],
+    ["/api/rules", "rule-list", renderRules],
+    ["/api/certs", "cert-list", (d) => renderCerts(d.certs || [])],
   ];
-  for (const [path, fn] of jobs) {
+  for (const [path, boxId, fn] of jobs) {
     try {
       fn(await getJSON(path));
     } catch (e) {
       // 单个接口失败不应让整页空白 —— 明确标出是哪一项失败了
-      const id = { "/api/cache": "cache-list", "/api/rules": "rule-list", "/api/certs": "cert-list" }[path];
-      $(id).innerHTML = "";
-      $(id).appendChild(emptyBox(`读取失败：${e.message}`));
+      $(boxId).innerHTML = "";
+      $(boxId).appendChild(emptyBox(`读取失败：${e.message}`));
     }
   }
 

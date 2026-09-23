@@ -194,6 +194,9 @@ services:
       - TPROXY_CONF_D=/opt/TProxy/proxy/tengine/conf.d
       - TPROXY_DNSMASQ_CONF=/opt/TProxy/proxy/dnsmasq/dnsmasq.conf
       - TPROXY_CERTS_DIR=/opt/TProxy/proxy/ca/certs
+      - TPROXY_LOG_DIR=/var/log/nginx
     volumes:
       - /opt/TProxy/proxy:/opt/TProxy/proxy:ro
       - ${CACHE_BASE}:${CACHE_BASE}:ro
+      # nginx 日志（命中率统计的数据来源），只读
+      - ./logs/tengine:/var/log/nginx:ro

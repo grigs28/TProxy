@@ -18,6 +18,8 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setenv("TPROXY_CONF_D", str(tmp_path / "conf"))
     monkeypatch.setenv("TPROXY_DNSMASQ_CONF", str(tmp_path / "dnsmasq.conf"))
     monkeypatch.setenv("TPROXY_CERTS_DIR", str(tmp_path / "certs"))
+    monkeypatch.setenv("TPROXY_LOG_DIR", str(tmp_path / "logs"))
+    (tmp_path / "logs").mkdir()
     app = create_app()
     app.config["TESTING"] = True
     return app.test_client()
@@ -62,3 +64,26 @@ def test_certs_empty_without_cert_files(client):
     r = client.get("/api/certs")
     assert r.status_code == 200
     assert r.get_json()["certs"] == []
+
+
+def test_hitrate_lists_six_types(client):
+    """六类都要出现 —— registry/git 由后端自缓存，需明确标注而非缺席。"""
+    r = client.get("/api/hitrate")
+    assert r.status_code == 200
+    rows = r.get_json()["hitrate"]
+    types = [x["type"] for x in rows]
+    assert len(rows) == 6
+    for t in ("os", "python", "nodejs", "java", "registry", "git"):
+        assert t in types
+
+
+def test_hitrate_reads_real_log_format(client, tmp_path):
+    """用与 nginx.conf `log_format main` 一致的行验证端到端解析。"""
+    line = ('127.0.0.1 - [23/Sep/2026:05:09:28 +0000] "GET / HTTP/1.1" 200 696 '
+            '"-" "curl/8.4.0" cache={}\n')
+    (tmp_path / "logs" / "python.log").write_text(line.format("HIT") * 3 + line.format("MISS"))
+    r = client.get("/api/hitrate")
+    rows = {x["type"]: x for x in r.get_json()["hitrate"]}
+    assert rows["python"]["hit"] == 3
+    assert rows["python"]["miss"] == 1
+    assert rows["python"]["rate"] == 75.0

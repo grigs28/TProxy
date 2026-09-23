@@ -10,6 +10,7 @@ from flask import Flask, jsonify, send_from_directory
 from backend.cache_stats import all_cache_usage
 from backend.certs import list_certs
 from backend.config_read import parse_dnsmasq_rules, parse_nginx_servers
+from backend.hitrate import all_hitrate
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -18,6 +19,8 @@ DEFAULTS = {
     "TPROXY_DNSMASQ_CONF": "/opt/TProxy/proxy/dnsmasq/dnsmasq.conf",
     "TPROXY_CONF_D": "/opt/TProxy/proxy/tengine/conf.d",
     "TPROXY_CERTS_DIR": "/opt/TProxy/proxy/ca/certs",
+    # 容器内看到的 nginx 日志目录（compose 把 ./logs/tengine 挂到 /var/log/nginx）
+    "TPROXY_LOG_DIR": "/var/log/nginx",
 }
 
 
@@ -49,6 +52,10 @@ def create_app():
     @app.route("/api/certs")
     def certs():
         return jsonify({"certs": list_certs(cfg("TPROXY_CERTS_DIR"))})
+
+    @app.route("/api/hitrate")
+    def hitrate():
+        return jsonify({"hitrate": all_hitrate(cfg("TPROXY_LOG_DIR"))})
 
     return app
 

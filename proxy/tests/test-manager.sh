@@ -76,6 +76,36 @@ registry registry
 git git
 PATHS
 
+echo "== 命中率应有数据 =="
+hit_json=$(curl -s --max-time 10 "$BASE/api/hitrate" 2>/dev/null)
+hn=$(grep -o '"type"' <<<"$hit_json" | wc -l)
+if [[ "$hn" -eq 6 ]]; then
+  echo "  ✅ 六类"
+else
+  echo "  ❌ 期望 6 类，实际 $hn"
+  fail=1
+fi
+# 至少要有一类算出命中率 —— 全为 null 说明日志路径不对或格式不符
+# （旧 proxy-manager 的 monitor 正是格式不符导致恒为空）
+#
+# 用 python 解析而非 grep：jsonify 输出的是【紧凑格式】（"rate":49.2，冒号后无空格），
+# 按带空格的模式 grep 会漏判 —— 我第一版就是这么写的，把正常的 API 判成了故障。
+rates=$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(0)
+print(' '.join(f\"{r['type']}={r['rate']}%\" for r in d.get('hitrate', []) if r.get('rate') is not None))
+" "$hit_json" 2>/dev/null)
+
+if [[ -n "$rates" ]]; then
+  echo "  ✅ 命中率: $rates"
+else
+  echo "  ❌ 所有类型命中率均为空 —— 日志路径或格式不匹配"
+  fail=1
+fi
+
 echo "== 劫持规则应非空 =="
 r=$(curl -s --max-time 10 "$BASE/api/rules" 2>/dev/null | grep -o '"domain"' | wc -l)
 if [[ "$r" -gt 0 ]]; then
