@@ -45,3 +45,23 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+
+  # Docker Hub 镜像缓存。
+  # 用 host 网络且监听 127.0.0.1:5001 —— 只对 tengine 暴露，不占公网端口。
+  # 注意：REGISTRY_HTTP_ADDR 与访问地址必须一致。旧环境曾把容器内地址写成 5001
+  # 却用 ports "5001:5000" 映射到无人监听的 5000，导致 6/7 个 registry 全部不可达。
+  registry-docker:
+    image: registry:2
+    container_name: v3-reg-docker
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io
+      - REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
+      - REGISTRY_HTTP_ADDR=127.0.0.1:5001
+      - REGISTRY_HTTP_SECRET=tproxy-shared-secret
+    volumes:
+      - ${CACHE_BASE}/registry/docker:/var/lib/registry
+    dns:
+      - 223.5.5.5
+      - 223.6.6.6

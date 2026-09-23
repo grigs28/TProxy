@@ -19,3 +19,13 @@ mirrors.aliyun.com
 mirrors.tuna.tsinghua.edu.cn
 mirrors.ustc.edu.cn
 mirrors.huaweicloud.com
+# Docker
+registry-1.docker.io
+auth.docker.io
+production.cloudflare.docker.com
+quay.io
+gcr.io
+ghcr.io
+k8s.gcr.io
+registry.k8s.io
+mcr.microsoft.com
