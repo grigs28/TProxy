@@ -21,6 +21,7 @@ ghcr.io
 k8s.gcr.io
 registry.k8s.io
 mcr.microsoft.com
+nvcr.io
 EOF
 }
 

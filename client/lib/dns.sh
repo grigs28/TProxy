@@ -21,7 +21,7 @@ BACKUP_HOSTS="$BACKUP_DIR/hosts.original"
 # ⚠️ 要与服务端 dnsmasq.conf 的 address= 规则保持一致。
 HIJACK_DOMAINS=(
   repo.openeuler.org mirrors.openeuler.org
-  registry-1.docker.io auth.docker.io
+  registry-1.docker.io auth.docker.io nvcr.io
   pypi.org files.pythonhosted.org
   registry.npmjs.org
   repo1.maven.org

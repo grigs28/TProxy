@@ -161,6 +161,25 @@ services:
       - 223.5.5.5
       - 223.6.6.6
 
+  # NVIDIA NGC —— AI 场景的主力仓库（CUDA / TensorRT / Triton / NIM / RAPIDS）。
+  # 公开镜像允许匿名拉取（实测：匿名 token 可取 nvidia/cuda 的 manifest），
+  # 故可以做共享缓存，不必经手任何人的凭据。
+  registry-nvcr:
+    image: registry:2
+    container_name: v3-reg-nvcr
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - REGISTRY_PROXY_REMOTEURL=https://nvcr.io
+      - REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry
+      - REGISTRY_HTTP_ADDR=127.0.0.1:5007
+      - REGISTRY_HTTP_SECRET=${REGISTRY_HTTP_SECRET}
+    volumes:
+      - ${CACHE_BASE}/registry/nvcr:/var/lib/registry
+    dns:
+      - 223.5.5.5
+      - 223.6.6.6
+
   # git 仓库缓存。本地构建（Go 编译），首次 up 需数分钟。
   # 监听 127.0.0.1:4999，只对 tengine 暴露。
   gitcache:

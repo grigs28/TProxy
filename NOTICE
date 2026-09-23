@@ -57,7 +57,7 @@ Copyright (c) 2026 grigs28
 
 **阶段 3-6**（计划 B，标签 `phase-3-6-cache-backends`）
 
-- Docker 镜像缓存（registry:2，6 个上游实例）
+- Docker 镜像缓存（registry:2，上游实例数随劫持域名增减）
 - git 仓库缓存（gitcache）
 - Python / Node.js / Java 缓存
 - 审查修复：git push 被错误路由（改为直连）、私有仓库经共享缓存无认证开放
@@ -75,6 +75,17 @@ Copyright (c) 2026 grigs28
 - `manager/`：Flask + 原生 JS 的只读仪表盘（缓存占用 / 劫持规则 / 证书 / 分流入口）
 - 审查修复：缓存目录路径映射错误导致 4/6 类被误报为「未启用/空」
   （含 os 缓存已有 75MB 数据却显示未启用）
+
+**新增 NVIDIA NGC 上游**（0.3.6）
+
+- 劫持并缓存 `nvcr.io`（NVIDIA NGC）—— AI 场景的主力仓库
+  （CUDA / TensorRT / Triton / NIM / RAPIDS）。
+  实测其**公开镜像允许匿名拉取**（匿名 token 可取 `nvidia/cuda` 的 manifest），
+  故可以做共享缓存，不必经手任何人的凭据 —— 这是能否共享缓存的前提
+- 完整配套：dnsmasq 劫持 + 域名证书 + 独立 registry:2 实例（127.0.0.1:5007）
+  + 缓存目录 + 客户端 certs.d 清单。**缺任何一样都只有 MITM 成本、没有缓存收益**，
+  这一点写在 `registry.conf` 的注释里
+- 实测：4 MB 的镜像层经代理取回后，缓存由 28 KB 增至 4548 KB
 
 **客户端脚本 0.0.3：换根后运行时 CA 包不更新**（0.3.0）
 

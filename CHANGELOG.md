@@ -12,6 +12,22 @@
 
 ---
 
+## [0.3.6] - 2026-09-23
+
+### 新增
+- 劫持并缓存 **`nvcr.io`（NVIDIA NGC）** —— AI 场景的主力仓库
+  （CUDA / TensorRT / Triton / NIM / RAPIDS）
+- 配套改动：dnsmasq 劫持、域名证书、独立 registry:2 实例（127.0.0.1:5007）、
+  缓存目录、客户端 `certs.d` 清单与劫持域名清单（两份实现）。
+  **缺任何一样都只有 MITM 成本、没有缓存收益** —— 这条约束写在
+  `registry.conf` 的注释里，加仓库时容易被忽略
+
+### 说明
+- Docker Hub 与 ghcr 上的 AI 镜像（`ollama/ollama`、`ghcr.io/open-webui`、
+  `ghcr.io/huggingface/…`）**本来就在覆盖内**，不需要单独加
+- `nvcr.io` 的公开镜像允许匿名拉取（实测），故可共享缓存；
+  若某个仓库必须带凭据，则不能共享 —— 与 git 私有仓库同一处理原则
+
 ## [0.3.5] - 2026-09-23
 
 ### 新增

@@ -29,6 +29,8 @@ ghcr.io
 k8s.gcr.io
 registry.k8s.io
 mcr.microsoft.com
+# NVIDIA NGC（AI 镜像，公开仓库可匿名拉取）
+nvcr.io
 # Git
 github.com
 gitlab.com

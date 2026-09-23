@@ -17,12 +17,12 @@ for fn in install_system_ca install_docker_ca install_java_ca install_runtime_ca
   fi
 done
 
-echo "== Docker 域名清单应为 9 个 =="
+echo "== Docker 域名清单应为 10 个 =="
 n=$(docker_ca_domains | grep -c .)
-if [[ "$n" -eq 9 ]]; then
-  echo "  ✅ 9 个域名"
+if [[ "$n" -eq 10 ]]; then
+  echo "  ✅ 10 个域名"
 else
-  echo "  ❌ 期望 9，实际 $n"
+  echo "  ❌ 期望 10，实际 $n"
   fail=1
 fi
 

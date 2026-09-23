@@ -11,7 +11,7 @@ echo "   HOST_IP=$HOST_IP  CACHE_BASE=$CACHE_BASE"
 
 echo "== 2/6 准备缓存目录 =="
 # 容器内 /var/cache/tproxy 挂载自 nginx/，nginx 会在其中自动创建 os/ 子目录
-sudo mkdir -p "${CACHE_BASE}"/{nginx,git,registry/{docker,quay,gcr,ghcr,k8s-io,mcr}}
+sudo mkdir -p "${CACHE_BASE}"/{nginx,git,registry/{docker,quay,gcr,ghcr,k8s-io,mcr,nvcr}}
 sudo chmod 755 "${CACHE_BASE}" 2>/dev/null || true
 # gitcache 容器以 uid 1000 运行（见 gitcache/Dockerfile），
 # 若目录由 docker 以 root 自动创建，它会无法写入、镜像建立失败。
