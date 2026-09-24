@@ -12,6 +12,48 @@
 
 ---
 
+## [0.5.2] - 2026-09-25
+
+### 修复：github.com 的子域被劫持却没人服务（`.14` 的 dnf 报 SSL 失败）
+
+**症状**（`.14`）：
+
+```
+Errors during downloading metadata for repository 'gh-cli':
+  - Curl error (35): SSL connect error for https://cli.github.com/packages/rpm/repodata/repomd.xml
+    [OpenSSL/3.0.12: error:0A000438:SSL routines::tlsv1 alert internal error]
+```
+
+**根因**：`address=/github.com/` **连子域一起匹配**（dnsmasq 的语义）——
+本意是「劫持 git 仓库主机」，但 `cli` / `api` / `codeload` / `ssh` / `gist` 这些子域
+也一并被吞到 `.18`。而 tengine **只服务 `github.com` 本身**
+（`tengine/conf.d/git.conf` 的 `server_name`），拿不出匹配的证书。
+
+**劫持了却不服务 = 纯 MITM 成本，还把机器弄坏。** 这正是 `registry.conf` 里
+写的那条原则的另一面：「若某域名无缓存实例，应同时从 dnsmasq 劫持清单和
+server_name 中移除」。
+
+**改动**：给这 5 个子域加 dnsmasq 例外，让它们走正常上游解析
+（dnsmasq 里**更具体的域名优先**，会盖过 `address=/github.com/`）。
+
+⚠️ **必须用显式上游（`server=/域名/223.5.5.5`），不能用 `server=/域名/#`**。
+实测 `#`（手册说"用默认服务器"）会连带把 `address=/github.com/` 的语义带偏 ——
+`github.com` 本身开始从**上游缓存**作答（日志里是
+`cached github.com is 140.82.116.3`），**劫持整个失效**。这是一个很隐蔽的坑：
+配置语法合法、服务正常启动、只有查日志才看得出答案来自缓存。
+
+**为什么不改成「不劫持、让它直连」**：全网是异构的 —— 实测 `.14`/`.8`/`.19`
+能直连 GitHub 真实 IP，而 `.6`/`.143`/`.92`/`.113` 不能（它们唯一的出网路径就是 `.18`）。
+所以对一半机器那样改等于没修。
+
+### 验证
+
+- `.14`：`dnf makecache --repo=gh-cli` → **Metadata cache created.**（原报 SSL 失败）
+- 全网抽查 8 台：`github.com` 全部仍指 `.18` ✓、`cli.github.com` 全部拿到真实 IP ✓
+- `.14` 的 git 仍走缓存（拿到最新提交），私有仓库匿名仍**明确报错**（非静默）
+- `proxy/tests/test-dns.sh` **DNS-ALL-PASS**，新增守卫：5 个放行规则必须在位、
+  且不得出现 `server=/域名/#` 写法
+
 ## [0.5.1] - 2026-09-24
 
 ### 结题归档

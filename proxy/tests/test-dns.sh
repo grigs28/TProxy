@@ -40,6 +40,40 @@ else
   fail=1
 fi
 
+echo "== github.com 的子域必须【放行】（劫持了却不服务 = 把机器弄坏）=="
+# ⚠️ `address=/github.com/` **连子域一起匹配**（dnsmasq 的语义），而 tengine
+#    只服务 github.com 本身（见 tengine/conf.d/git.conf 的 server_name）。
+#    于是 cli/api/codeload 这些子域被劫持到本机却拿不到匹配的证书 ——
+#    实测 .14 的 dnf gh-cli 源（https://cli.github.com/packages/rpm）报
+#      Curl error (35): SSL connect error ... tlsv1 alert internal error
+#    这正是 registry.conf 里那条原则的另一面：
+#    「若某域名无缓存实例，应同时从 dnsmasq 劫持清单和 server_name 中移除」。
+#
+#    下面断言这些例外**仍然存在**，防止被当成冗余配置清理掉。
+CONF="$(dirname "$0")/../dnsmasq/dnsmasq.conf"
+for d in api.github.com codeload.github.com cli.github.com ssh.github.com gist.github.com; do
+  n=$(grep -cE "^server=/${d//./\\.}/" "$CONF" 2>/dev/null || echo 0)
+  if [[ "$n" -ge 1 ]]; then
+    echo "  ✅ $d 有放行规则（$n 条）"
+  else
+    echo "  ❌ $d 没有放行规则 —— 它会被劫持到本机却无人服务"
+    fail=1
+  fi
+done
+
+# ⚠️ 用**显式上游**，别用 `server=/域名/#`。
+#    实测 `#` 会连带把 address=/github.com/ 的语义带偏：github.com 本身
+#    开始从上游缓存答（日志 `cached github.com is 140.82.116.3`），劫持整个失效。
+if grep -qE '^server=/[^/]+/#$' "$CONF" 2>/dev/null; then
+  echo "  ❌ 用了 server=/域名/# —— 会把 address= 的语义带偏，请改显式上游"
+  fail=1
+else
+  echo "  ✅ 未使用 server=/域名/# （显式上游）"
+fi
+
+# 而 github.com 本身仍必须被劫持
+check "github.com 仍被劫持" "$HOST_IP" "$($DIG github.com +short | head -1)"
+
 if [[ $fail -eq 0 ]]; then
   echo "DNS-ALL-PASS"
 else
