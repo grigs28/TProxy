@@ -47,7 +47,7 @@
 #        不依赖 wget.sh —— 直接用系统 wget 取文件
 #  版本号：每次修改递增，10 进位
 # ============================================================
-VERSION="0.2.3"
+VERSION="0.2.4"
 
 # ⚠️ **必须先 source、后 `set -u`** —— 顺序反了会在某些机器上直接静默退出。
 #
@@ -1148,6 +1148,47 @@ check_system_repo() {
             print_warning "  移除失败，请手工执行 git config --global --unset …"
         fi
     fi
+
+    # ---- pip / npm：仓库地址指向已下线的 Nexus ----
+    #
+    # 与上面 apt/dnf 那套同一回事，只是换了配置文件。实测那批跑过旧架构
+    # ve.client.sh 的 openEuler 机器上全是这个，**pip install 直接失败**。
+    # 修法是删掉那一行回落默认（pypi.org / registry.npmjs.org 会被劫持），
+    # 不是改写地址。
+    local pf nf
+    pf=$(pip_dead_nexus)
+    if [[ -n "$pf" ]]; then
+        print_warning "  pip 的 index-url 指向已下线的 Nexus（pip install 会失败）："
+        while read -r f; do [[ -n "$f" ]] && print_info "    %s" "$f"; done <<< "$pf"
+        if repair_pip_config; then
+            print_success "  已清掉（回落默认 pypi.org，会被劫持）"
+        else
+            print_warning "  清除失败，请手工检查上列文件"
+        fi
+    fi
+    nf=$(npm_dead_nexus)
+    if [[ -n "$nf" ]]; then
+        print_warning "  npm 的 registry 指向已下线的 Nexus（npm 会失败）："
+        while read -r f; do [[ -n "$f" ]] && print_info "    %s" "$f"; done <<< "$nf"
+        if repair_npm_config; then
+            print_success "  已清掉（回落默认 registry.npmjs.org，会被劫持）"
+        else
+            print_warning "  清除失败，请手工检查上列文件"
+        fi
+    fi
+
+    # ---- git：指向内网旧缓存的 [http "..."] 段（带 sslVerify = false）----
+    if [[ -n "$(git_stale_internal_http)" ]]; then
+        print_warning "  git 配置里有指向内网旧缓存的 [http] 段（含 sslVerify = false）："
+        git_stale_internal_http | sed 's/^/      /' >&2 || true
+        while read -r l; do [[ -n "$l" ]] && print_info "    %s" "$l"; done \
+            <<< "$(git_stale_internal_http)"
+        if repair_git_config; then
+            print_success "  已移除该段（其他段未动）"
+        else
+            print_warning "  移除失败，请手工编辑 ~/.gitconfig"
+        fi
+    fi
     return 0
 }
 
@@ -1968,6 +2009,18 @@ show_status() {
         print_warning "git 配置把请求重定向到了别处（绕过缓存）"
         print_info "  重新接入可自动移除: w.sh tp.client.sh -i"
     fi
+    if [[ -n "$(pip_dead_nexus)" ]]; then
+        print_error "pip 的 index-url 指向已下线的 Nexus —— pip install 会失败"
+        print_info "  重新接入可自动清除: w.sh tp.client.sh -i"
+    fi
+    if [[ -n "$(npm_dead_nexus)" ]]; then
+        print_error "npm 的 registry 指向已下线的 Nexus —— npm 会失败"
+        print_info "  重新接入可自动清除: w.sh tp.client.sh -i"
+    fi
+    if [[ -n "$(git_stale_internal_http)" ]]; then
+        print_warning "git 配置里有指向内网旧缓存的 [http] 段（含 sslVerify = false）"
+        print_info "  重新接入可自动移除: w.sh tp.client.sh -i"
+    fi
     if [[ -f "${DOCKER_DAEMON_JSON:-/etc/docker/daemon.json}" ]]; then
         local _m _dr
         _dr=$(docker_conf_data_root)
@@ -2062,6 +2115,162 @@ do_remove() {
 
 # ====================== 执行入口 ======================
 print_color "绿" "### tp.client.sh v${VERSION} ###"
+
+# ============================================================
+# 工具链配置（pip / npm / git）里的「死 Nexus」
+# ============================================================
+#
+# 与 apt/dnf 那套是同一回事，只是换了配置文件。实测那批跑过旧架构
+# `ve.client.sh` 的 openEuler 机器上全是这个：
+#   · pip  /root/.pip/pip.conf   index-url → http://192.168.0.18:8081/repository/pypi-all/simple
+#   · npm  /root/.npmrc          registry  → http://192.168.0.18:8081/repository/npm-proxy/
+#   · git  ~/.gitconfig          [http "http://192.168.0.36:4999/"] + sslVerify = false
+# Nexus 下线后一律不可达（8081 无监听），pip install 直接失败、npm 完全不能用。
+#
+# **修法是「删掉那一行、回落默认」，不是改写地址**：TProxy 靠 DNS 劫持生效，
+# 默认地址 pypi.org / registry.npmjs.org 本来就会被劫持 —— 改写反而多一个
+# 要维护的值，而且下次服务端换地址又要再改一遍。
+
+# 内网 IP（死 Nexus 与旧缓存都挂在内网地址上）。
+# 公网镜像站（mirrors.aliyun.com 等）不算 —— 判据必须能区分这两者。
+_is_internal_ip() {
+  case "$1" in
+    192.168.*|10.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# ---- pip ----
+
+# pip 配置文件的候选位置。给了目录就只看该目录下的 pip.conf（便于测试）。
+pip_config_files() {
+  if [[ -n "${1:-}" ]]; then
+    printf '%s\n' "$1/pip.conf"
+  else
+    printf '%s\n' /etc/pip.conf /root/.pip/pip.conf /root/.config/pip/pip.conf /etc/xdg/pip/pip.conf
+  fi
+}
+
+# 判断：哪些 pip 配置的 index-url 指向死 Nexus。只读。
+pip_dead_nexus() {
+  local f
+  while read -r f; do
+    [[ -f "$f" ]] || continue
+    grep -qE "^[[:space:]]*index-url[[:space:]]*=.*${_DEAD_NEXUS_RE}" "$f" 2>/dev/null && printf '%s\n' "$f"
+  done < <(pip_config_files "${1:-}")
+}
+
+# 删掉指向死 Nexus 的 index-url 与配套的 trusted-host。
+# trusted-host 是给那个自签服务的证书开后门用的，一起清掉才是干净状态。
+repair_pip_config() {
+  local f did=0
+  while read -r f; do
+    [[ -f "$f" ]] || continue
+    local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/toolchain"
+    mkdir -p "$bk" 2>/dev/null || true
+    cp -a "$f" "$bk/$(tr '/' '_' <<<"$f").$(date +%s)" 2>/dev/null || true
+    local tmp
+    tmp=$(mktemp) || continue
+    awk -v RE="$_DEAD_NEXUS_RE" '
+      /^[[:space:]]*index-url[[:space:]]*=/ { if ($0 ~ RE) next }
+      /^[[:space:]]*trusted-host[[:space:]]*=/ {
+        v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); gsub(/[[:space:]]/, "", v)
+        if (v ~ /^[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+$/) next
+      }
+      { print }
+    ' "$f" > "$tmp" && cat "$tmp" > "$f"
+    rm -f "$tmp"
+    did=1
+  done < <(pip_dead_nexus "${1:-}")
+  [[ $did -eq 1 ]]
+}
+
+# ---- npm ----
+
+npm_config_files() {
+  if [[ -n "${1:-}" ]]; then
+    printf '%s\n' "$1/npmrc"
+  else
+    printf '%s\n' /root/.npmrc /usr/etc/npmrc /etc/npmrc /usr/local/etc/npmrc
+  fi
+}
+
+# 判断：哪些 npmrc 的 registry 指向死 Nexus。只读。
+npm_dead_nexus() {
+  local f
+  while read -r f; do
+    [[ -f "$f" ]] || continue
+    grep -qE "^[[:space:]]*registry[[:space:]]*=.*${_DEAD_NEXUS_RE}" "$f" 2>/dev/null && printf '%s\n' "$f"
+  done < <(npm_config_files "${1:-}")
+}
+
+# 删掉指向死 Nexus 的 registry，并清掉 strict-ssl（那是给死 Nexus 的自签证书
+# 开后门用的；留着等于对**所有** npm 站点都不校验证书）。
+repair_npm_config() {
+  local f did=0
+  while read -r f; do
+    [[ -f "$f" ]] || continue
+    local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/toolchain"
+    mkdir -p "$bk" 2>/dev/null || true
+    cp -a "$f" "$bk/$(tr '/' '_' <<<"$f").$(date +%s)" 2>/dev/null || true
+    local tmp
+    tmp=$(mktemp) || continue
+    awk -v RE="$_DEAD_NEXUS_RE" '
+      /^[[:space:]]*registry[[:space:]]*=/ { if ($0 ~ RE) next }
+      /^[[:space:]]*strict-ssl[[:space:]]*=/ { next }
+      { print }
+    ' "$f" > "$tmp" && cat "$tmp" > "$f"
+    rm -f "$tmp"
+    did=1
+  done < <(npm_dead_nexus "${1:-}")
+  [[ $did -eq 1 ]]
+}
+
+# ---- git ----
+
+# 判断：gitconfig 里指向**内网 IP** 的 `[http "..."]` 段。只读。
+#
+# `[http "<url>"]` 是 git 的「按 URL 生效的设置」段 —— 实测内容都是
+# `sslVerify = false`，是旧缓存（.36:4999）留下的。它**不重定向流量**
+# （那要 `http.proxy`，全网都是空的），所以没有功能影响；但 sslVerify=false
+# 是个安全隐患，且那段指向的服务早没了，该清。
+git_stale_internal_http() {
+  local f="${1:-$HOME/.gitconfig}"
+  [[ -f "$f" ]] || return 0
+  awk '
+    /^\[http "/ {
+      if (match($0, /"[^"]*"/)) {
+        url = substr($0, RSTART + 1, RLENGTH - 2)
+        if (url ~ /^https?:\/\/(192[.]168[.]|10[.]|172[.](1[6-9]|2[0-9]|3[01])[.])/) { print; next }
+      }
+    }
+  ' "$f"
+}
+
+# 整段移除（含段内所有行）。其他段一个字节不动。
+repair_git_config() {
+  local f="${1:-$HOME/.gitconfig}"
+  [[ -f "$f" ]] || return 0
+  [[ -n "$(git_stale_internal_http "$f")" ]] || return 0
+  local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/toolchain"
+  mkdir -p "$bk" 2>/dev/null || true
+  cp -a "$f" "$bk/$(tr '/' '_' <<<"$f").$(date +%s)" 2>/dev/null || true
+  local tmp
+  tmp=$(mktemp) || return 1
+  awk '
+    /^\[/ {
+      if ($0 ~ /^\[http "/ && match($0, /"[^"]*"/)) {
+        url = substr($0, RSTART + 1, RLENGTH - 2)
+        if (url ~ /^https?:\/\/(192[.]168[.]|10[.]|172[.](1[6-9]|2[0-9]|3[01])[.])/) { skip = 1; next }
+      }
+      skip = 0
+    }
+    !skip { print }
+  ' "$f" > "$tmp" && cat "$tmp" > "$f"
+  rm -f "$tmp"
+  return 0
+}
+
 
 case "$ACTION" in
     status)

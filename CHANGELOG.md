@@ -12,6 +12,52 @@
 
 ---
 
+## [0.4.7] - 2026-09-24
+
+### 新增：pip / npm / git 的「死 Nexus」清理（`tp.client.sh` → 0.2.4）
+
+巡检发现：**接入了 ≠ 配对了**。一批跑过旧架构 `ve.client.sh` 的 openEuler 机器上
+留着死 Nexus 的工具配置，而脚本此前只管 apt/dnf：
+
+| 工具 | 配置 | 值 | 后果 |
+|---|---|---|---|
+| pip | `/root/.pip/pip.conf`、`/etc/pip.conf` | `index-url = http://192.168.0.18:8081/repository/pypi-all/simple` | **`pip install` 直接失败**（8081 无监听） |
+| npm | `/root/.npmrc` | `registry = http://192.168.0.18:8081/repository/npm-proxy/` + `strict-ssl=false` | **npm 完全不能用** |
+| git | `~/.gitconfig` | `[http "http://192.168.0.36:4999/"]` + `sslVerify = false` | 无功能影响，但 `sslVerify=false` 是隐患 |
+
+实测 pip 中招 **9 台**：`.6 .8 .14 .16 .19 .35 .36 .37 .39`
+（`.8`/`.19` 是"已接入"的，pip 照样是坏的）。npm：`.16` 死 Nexus、`.8`/`.18` 指向华为云绕过缓存。
+git：**10 台**有 `.36` 残留。
+
+**修法是「删掉那一行、回落默认」，不是改写地址** —— TProxy 靠 DNS 劫持生效，
+默认的 `pypi.org` / `registry.npmjs.org` 本来就会被劫持，改写反而多一个要维护的值。
+`trusted-host` / `strict-ssl` 是给死 Nexus 的自签证书开后门的，一并清掉。
+
+新增 `pip_dead_nexus` / `repair_pip_config` / `npm_dead_nexus` / `repair_npm_config` /
+`git_stale_internal_http` / `repair_git_config`，判据复用同一套
+「**内网 IP + `/repository/`**」（必须含内网 IP，否则会误判华为云那类公网镜像）。
+
+### 修复：函数定义晚于主 dispatch → 运行时「未找到命令」
+
+第一次把工具链函数**追加到文件末尾**，而 `case "$ACTION" in` 在它之前 ——
+bash 执行到哪定义到哪，于是 `.70` 上报：
+
+```
+/tmp/tp.client.sh: 行 1159: pip_dead_nexus: 未找到命令
+```
+
+**单测全绿也没挡住**（测试是 source 整个文件，函数当然都在）。
+已移到 dispatch 之前，并加守卫：直接比行号，断言这几个函数定义早于 dispatch。
+
+### 验证
+
+- `.16`（问题最全）：pip 死 Nexus → 默认、npm 死 Nexus → `registry.npmjs.org`、
+  `.36` 段移除（`[safe]`/`[credential]` 段完好）、4 个文件已备份
+- `.70`（ai01，4×RTX 3090，13 个容器）：`registry-mirrors` 7→0、
+  **`runtimes.nvidia` 与 `data-root=/opt/docker` 原样保留、13 个容器全部 Up**、
+  dnf metalink 7→0、CA 已装
+- `.71`（ai02）上次接入时已处理干净，本轮无需改动
+
 ## [0.4.6] - 2026-09-24
 
 ### 修复（PVE 逐台接入时暴露的两个）

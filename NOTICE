@@ -53,6 +53,11 @@ Copyright (c) 2026 grigs28
 - 死 Nexus 路径的判据原本只认 `repository/debian-proxy`（apt 侧一条），
   dnf 侧漏网 —— `.16` 上 `dnf makecache` 一直报 `Curl error (7)` 而脚本报「正常」。
   改为「内网 IP + `/repository/`」并按段停用
+- **pip / npm / git 的死 Nexus 配置未清理**：跑过旧架构的机器上
+  `pip install` 直接失败（index-url 指向 `:8081`）、npm 完全不能用。
+  新增三者的检出与清理（删掉那一行回落默认，而非改写地址）
+- **工具链函数定义晚于主 dispatch** → 运行时「未找到命令」，单测全绿也没挡住
+  （测试 source 整个文件）。已加守卫：断言定义早于 `case "$ACTION"`
 - **`set -u` 开在 `source bas.sh` 之前导致静默死亡**：bas.sh 读 `$LANG`，
   而 `.17`（OpenWrt）没有该变量；`set -u` 下这会退出整个 shell，
   `2>/dev/null` 吞掉原因、`|| 兜底` 也拦不住 → 表现为「无输出、退出码 1」。
