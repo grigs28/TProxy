@@ -50,6 +50,11 @@ Copyright (c) 2026 grigs28
 - 无 `dig` 时改用 `nslookup` / `resolvectl` / `getent ahostsv4` 做自检
 - `HIJACK_DOMAINS` 由 10 个补齐到服务端实际劫持的 37 个，守卫测试改为
   直接解析 `proxy/dnsmasq/dnsmasq.conf` 当基准
+- 死 Nexus 路径的判据原本只认 `repository/debian-proxy`（apt 侧一条），
+  dnf 侧漏网 —— `.16` 上 `dnf makecache` 一直报 `Curl error (7)` 而脚本报「正常」。
+  改为「内网 IP + `/repository/`」并按段停用
+- **修复判据漏了新检测项**（报问题 → 却说正常 → 修复没跑）。这个错已犯三次
+  （apt 漏「重复」、dnf 漏「metalink」、这次漏「死 Nexus」），已加回归守卫
 - **`client/dist/tp.client.sh` 纳入版本控制** —— 它被 `.gitignore` 第 9 行的
   `dist/` 误伤，此前从未入库（与阶段 7「三个核心库文件因 `.gitignore`
   规则从未入库」是同一个坑，已是第二次）

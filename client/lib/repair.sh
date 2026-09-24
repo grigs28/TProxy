@@ -24,6 +24,77 @@ PROXMOX_KEYRING="/usr/share/keyrings/proxmox-archive-keyring.gpg"
 # 已下线的代理路径特征。含 IP 通配，因为旧配置里 .18 与 .36 都出现过。
 _DEAD_PROXY_RE='repository/debian-proxy'
 
+# 已下线的 **Nexus** 路径特征：内网 IP（可选端口）+ `/repository/`。
+#
+# 旧架构把仓库挂成 `http://<cacheIP>[:8081]/repository/<名>/`，Nexus 下线后
+# 这些 URL 一律不可达。原来只认 `repository/debian-proxy` 这一条（apt 侧的
+# 历史配置），**dnf 侧的漏网** —— 实测 `.16` 的 nexus-openeuler.repo 挂着
+# `repository/openEuler-24.03-OS/` 等三条，`dnf makecache` 直接
+# `Curl error (7): Couldn't connect to server ... port 8081`，
+# 而脚本还在报「正常」。
+#
+# ⚠️ 判据必须含【内网 IP】这一条：公网镜像站也有 `/repository/` 路径
+#    （如 mirrors.aliyun.com/repository/openeuler/），不能误判。
+_DEAD_NEXUS_RE='https?://[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+(:[0-9]+)?/repository/'
+
+# 判断：哪些 .repo 文件里有**启用中**的死 Nexus 仓库。只读。
+# 与 dnf_metalink_sources 同样的两条约束：不递归进 backup/，只看启用中的段。
+dead_nexus_repos() {
+  local d="${1:-/etc/yum.repos.d}" f
+  for f in "$d"/*.repo; do
+    [[ -f "$f" ]] || continue
+    awk -v RE="$_DEAD_NEXUS_RE" '
+      /^\[/ { sec = $0; gsub(/[][]/, "", sec); next }
+      /^[[:space:]]*enabled[[:space:]]*=/ {
+        v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); gsub(/[[:space:]]/, "", v)
+        off[sec] = (v == "0" || v == "false" || v == "no")
+        next
+      }
+      /^[[:space:]]*baseurl[[:space:]]*=/ { if ($0 ~ RE) has[sec] = 1 }
+      END { for (s in has) if (!off[s]) { print FILENAME; exit } }
+    ' "$f"
+  done
+}
+
+# 停用死 Nexus 仓库所在的**段**（不是删段）。返回 0=改过。
+#
+# 为什么是「停用」而不是「删段」：删了不可逆，而这个文件里往往还混着
+# **正常**的仓库段（实测 .16 的 nexus-openeuler.repo 就是死段 + 正常段混排），
+# 按段停用最不容易误伤。停用后 dnf 不再尝试它，报错即消失。
+disable_dead_nexus_repos() {
+  local d="${1:-/etc/yum.repos.d}" f did=0
+  while read -r f; do
+    [[ -n "$f" ]] || continue
+    local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/yum.repos.d"
+    mkdir -p "$bk" 2>/dev/null || true
+    cp -a "$f" "$bk/$(basename "$f").$(date +%s)" 2>/dev/null || true
+    local tmp
+    tmp=$(mktemp) || continue
+    # 两遍扫描：先标出「该段有死 Nexus baseurl」，再逐段改写。
+    # enabled 可能写在 baseurl 之前，所以必须先标后改。
+    # 段里若原本**没有** enabled 行，要在段末补一行 —— 否则 dnf 默认是启用的。
+    awk -v RE="$_DEAD_NEXUS_RE" '
+      NR == FNR {
+        if ($0 ~ /^\[/) { sec = $0; gsub(/[][]/, "", sec) }
+        else if ($0 ~ /^[ \t]*baseurl[ \t]*=/) { if ($0 ~ RE) dead[sec] = 1 }
+        next
+      }
+      /^\[/ {
+        if (sec != "" && dead[sec] && !saw_en) print "enabled=0"
+        sec = $0; gsub(/[][]/, "", sec); saw_en = 0
+        print; next
+      }
+      dead[sec] && /^[ \t]*enabled[ \t]*=/ { print "enabled=0"; saw_en = 1; next }
+      /^[ \t]*enabled[ \t]*=/ { saw_en = 1 }
+      { print }
+      END { if (sec != "" && dead[sec] && !saw_en) print "enabled=0" }
+    ' "$f" "$f" > "$tmp" && cat "$tmp" > "$f"
+    rm -f "$tmp"
+    did=1
+  done < <(dead_nexus_repos "$d")
+  [[ $did -eq 1 ]]
+}
+
 # 判断：列出仍然指向已下线代理路径的 apt 源行。只读。
 dead_proxy_sources() {
   local f="${1:-$APT_SOURCES_LIST}"
@@ -171,6 +242,9 @@ repair_dnf_repos() {
     rm -f "$tmp"
     did=1
   done < <(dnf_metalink_sources "$d")
+
+  # 死 Nexus 仓库：按段停用（做完这个，dnf 才不会再报 Curl error）
+  disable_dead_nexus_repos "$d" && did=1
 
   while read -r f; do
     [[ -n "$f" ]] || continue

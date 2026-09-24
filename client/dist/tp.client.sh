@@ -47,7 +47,7 @@
 #        不依赖 wget.sh —— 直接用系统 wget 取文件
 #  版本号：每次修改递增，10 进位
 # ============================================================
-VERSION="0.2.0"
+VERSION="0.2.1"
 set -uo pipefail
 
 source /opt/grigs/bas.sh 2>/dev/null || {
@@ -509,6 +509,19 @@ PROXMOX_KEYRING="/usr/share/keyrings/proxmox-archive-keyring.gpg"
 # 已下线的代理路径特征。含 IP 通配，因为旧配置里 .18 与 .36 都出现过。
 _DEAD_PROXY_RE='repository/debian-proxy'
 
+# 已下线的 **Nexus** 路径特征：内网 IP（可选端口）+ `/repository/`。
+#
+# 旧架构把仓库挂成 `http://<cacheIP>[:8081]/repository/<名>/`，Nexus 下线后
+# 这些 URL 一律不可达。原来只认 `repository/debian-proxy` 这一条（apt 侧的
+# 历史配置），**dnf 侧的漏网** —— 实测 `.16` 的 nexus-openeuler.repo 挂着
+# `repository/openEuler-24.03-OS/` 等三条，`dnf makecache` 直接
+# `Curl error (7): Couldn't connect to server ... port 8081`，
+# 而脚本还在报「正常」。
+#
+# ⚠️ 判据必须含【内网 IP】这一条：公网镜像站也有 `/repository/` 路径
+#    （如 mirrors.aliyun.com/repository/openeuler/），不能误判。
+_DEAD_NEXUS_RE='https?://[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+(:[0-9]+)?/repository/'
+
 # 判断：列出仍然指向已下线代理路径的 apt 源行。只读。
 dead_proxy_sources() {
   local f="${1:-$APT_SOURCES_LIST}"
@@ -569,6 +582,64 @@ codename_mismatch() {
 # 是否 rpm 系（dnf/yum）。Debian 系不走这套。
 is_rpm_like() {
   [[ -r /etc/os-release ]] && grep -qiE '^(ID|ID_LIKE)=.*(rhel|fedora|centos|openeuler|anolis|kylin)' /etc/os-release
+}
+
+# 判断：哪些 .repo 文件里有**启用中**的死 Nexus 仓库。只读。
+# 与 dnf_metalink_sources 同样的两条约束：不递归进 backup/，只看启用中的段。
+dead_nexus_repos() {
+  local d="${1:-/etc/yum.repos.d}" f
+  for f in "$d"/*.repo; do
+    [[ -f "$f" ]] || continue
+    awk -v RE="$_DEAD_NEXUS_RE" '
+      /^\[/ { sec = $0; gsub(/[][]/, "", sec); next }
+      /^[[:space:]]*enabled[[:space:]]*=/ {
+        v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); gsub(/[[:space:]]/, "", v)
+        off[sec] = (v == "0" || v == "false" || v == "no")
+        next
+      }
+      /^[[:space:]]*baseurl[[:space:]]*=/ { if ($0 ~ RE) has[sec] = 1 }
+      END { for (s in has) if (!off[s]) { print FILENAME; exit } }
+    ' "$f"
+  done
+}
+
+# 停用死 Nexus 仓库所在的**段**（不是删段）。返回 0=改过。
+#
+# 为什么是「停用」而不是「删段」：删了不可逆，而这个文件里往往还混着
+# **正常**的仓库段（实测 .16 的 nexus-openeuler.repo 就是死段 + 正常段混排），
+# 按段停用最不容易误伤。停用后 dnf 不再尝试它，报错即消失。
+disable_dead_nexus_repos() {
+  local d="${1:-/etc/yum.repos.d}" f did=0
+  while read -r f; do
+    [[ -n "$f" ]] || continue
+    local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/yum.repos.d"
+    mkdir -p "$bk" 2>/dev/null || true
+    cp -a "$f" "$bk/$(basename "$f").$(date +%s)" 2>/dev/null || true
+    local tmp
+    tmp=$(mktemp) || continue
+    # 两遍扫描：先标出「该段有死 Nexus baseurl」，再逐段改写。
+    # enabled 可能写在 baseurl 之前，所以必须先标后改。
+    # 段里若原本**没有** enabled 行，要在段末补一行 —— 否则 dnf 默认是启用的。
+    awk -v RE="$_DEAD_NEXUS_RE" '
+      NR == FNR {
+        if ($0 ~ /^\[/) { sec = $0; gsub(/[][]/, "", sec) }
+        else if ($0 ~ /^[ \t]*baseurl[ \t]*=/) { if ($0 ~ RE) dead[sec] = 1 }
+        next
+      }
+      /^\[/ {
+        if (sec != "" && dead[sec] && !saw_en) print "enabled=0"
+        sec = $0; gsub(/[][]/, "", sec); saw_en = 0
+        print; next
+      }
+      dead[sec] && /^[ \t]*enabled[ \t]*=/ { print "enabled=0"; saw_en = 1; next }
+      /^[ \t]*enabled[ \t]*=/ { saw_en = 1 }
+      { print }
+      END { if (sec != "" && dead[sec] && !saw_en) print "enabled=0" }
+    ' "$f" "$f" > "$tmp" && cat "$tmp" > "$f"
+    rm -f "$tmp"
+    did=1
+  done < <(dead_nexus_repos "$d")
+  [[ $did -eq 1 ]]
 }
 
 # 判断：哪些 .repo 文件里还有 metalink=。
@@ -656,6 +727,9 @@ repair_dnf_repos() {
     rm -f "$tmp"
     did=1
   done < <(dnf_metalink_sources "$d")
+
+  # 死 Nexus 仓库：按段停用（做完这个，dnf 才不会再报 Curl error）
+  disable_dead_nexus_repos "$d" && did=1
 
   while read -r f; do
     [[ -n "$f" ]] || continue
@@ -924,6 +998,10 @@ check_system_repo() {
                 print_warning "  自动修复失败，请手工检查 /etc/apt/sources.list"
                 return 1
             fi
+        elif [[ -n "$ent" ]]; then
+            # 企业源是**内联**修掉的（见上面 disable_enterprise_sources）。
+            # 修完还打「apt 源正常」会误导 —— 明明刚动过东西。
+            :
         else
             print_success "  apt 源正常"
         fi
@@ -931,7 +1009,14 @@ check_system_repo() {
 
     # ---- dnf 源（仅 rpm 系）----
     if is_rpm_like; then
-        local m r f
+        local m r f nx
+        nx=$(dead_nexus_repos)
+        if [[ -n "$nx" ]]; then
+            print_warning "  dnf 源指向已下线的 Nexus（%s 个文件）—— dnf 会直接报连接失败" "$(grep -c . <<<"$nx")"
+            while read -r f; do
+                [[ -n "$f" ]] && print_info "    %s" "$f"
+            done <<< "$nx"
+        fi
         m=$(dnf_metalink_sources)
         r=$(dnf_redundant_repos)
         if [[ -n "$m" ]]; then
@@ -947,7 +1032,13 @@ check_system_repo() {
                 [[ -n "$f" ]] && print_info "    %s" "$f"
             done <<< "$r"
         fi
-        if [[ -n "$m" || -n "$r" ]]; then
+        # ⚠️ 判据必须**列全所有检测项**（nx / m / r）。
+        # 漏一个就会出现「报了问题、却说正常、还不修」——
+        # 实测 .16：metalink 与冗余段上一轮已修好（m、r 皆空），
+        # 只剩死 Nexus 非空，而这里当初只判 m||r → 打了警告又报「dnf 源正常」，
+        # repair_dnf_repos 压根没跑。**这个错本项目已经犯过三次**
+        # （apt 侧漏过「重复」、dnf 侧漏过「metalink」、这次漏「死 Nexus」）。
+        if [[ -n "$nx" || -n "$m" || -n "$r" ]]; then
             if repair_dnf_repos; then
                 print_success "  已修复（备份在 %s/yum.repos.d/）" "$BACKUP_DIR"
             else
@@ -1781,6 +1872,11 @@ show_status() {
     fi
     if is_rpm_like && [[ -n "$(dnf_metalink_sources)" ]]; then
         print_warning "dnf 源里有 metalink —— 会让拉取绕过缓存（%s 个文件）" "$(dnf_metalink_sources | wc -l)"
+        print_info "  重新接入可自动修复: w.sh tp.client.sh -i"
+    fi
+    if is_rpm_like && [[ -n "$(dead_nexus_repos)" ]]; then
+        print_error "dnf 源指向已下线的 Nexus（%s 个文件）—— dnf 会直接报 Curl error" "$(dead_nexus_repos | wc -l)"
+        print_info "  重新接入可自动停用: w.sh tp.client.sh -i"
         print_info "  重新接入可自动修复: w.sh tp.client.sh -i"
     fi
     if [[ -n "$(git_redirects)" ]]; then

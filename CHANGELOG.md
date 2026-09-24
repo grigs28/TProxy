@@ -12,6 +12,47 @@
 
 ---
 
+## [0.4.4] - 2026-09-24
+
+### 修复（真机端到端跑出来的，单测全绿也没挡住）
+
+- **死 Nexus 路径只认了一条**（`tp.client.sh` → 0.2.1）。`repair.sh` 的判据是
+  `repository/debian-proxy`（apt 侧那一条），而 dnf 侧同样中招却漏网 ——
+  实测 `.16` 的 `nexus-openeuler.repo` 挂着
+  `http://192.168.0.18:8081/repository/openEuler-24.03-OS/` 等三条，
+  旧 Nexus 下线后 `dnf makecache` 直接
+  `Curl error (7): Couldn't connect to server ... port 8081`，而脚本报「正常」。
+  新增 `dead_nexus_repos()` / `disable_dead_nexus_repos()`：判据是
+  **内网 IP + `/repository/`**（必须含内网 IP 这一条，否则会误判
+  `mirrors.aliyun.com/repository/…` 这类公网镜像站）；**按段停用**而不是删段
+  （那个文件里死段与正常段混排，按段停用最不容易误伤）。
+
+- **修复判据漏了新检测项 —— 报了问题、却说「正常」、修复压根没跑**。
+  `check_system_repo` 的 dnf 分支当初写的是 `if [[ -n "$m" || -n "$r" ]]`，
+  加上死 Nexus 检测后**没把它并入判据**。实测 `.16`：metalink 与冗余段
+  上一轮已修好（`m`、`r` 皆空），只剩死 Nexus 非空 → 判据为假 →
+  打了警告又报「dnf 源正常」，`repair_dnf_repos` 从未被调用，
+  死 Nexus 一直启用着。
+  ⚠️ **这个错本项目已经犯过三次**：apt 侧漏过「重复」、dnf 侧漏过「metalink」、
+  这次漏「死 Nexus」。已加回归守卫：断言**报出来的每一项都必须在修复判据里出现**。
+
+- 顺带：只修了企业版源时不再补一句「apt 源正常」（明明刚动过东西）。
+
+### 验证（`.16`，半接入的坏机器 → 全自动修复）
+
+| 项 | 修前 | 修后 |
+|---|---|---|
+| root CA | 未装 | 已装（系统信任库 + conda bundle） |
+| `/etc/hosts` pin | `github.com` ×2 | 已清空 |
+| dead Nexus | 3 段 `enabled=1` | 3 段 `enabled=0`（正常段不动） |
+| `dnf makecache` | `Curl error (7)` | **Metadata cache created.**（22~48 MB/s） |
+| `https://repo.openeuler.org/` | **000** | **302** |
+| `https://pypi.org/simple/` | — | **200** |
+| 自检 | — | **37 个劫持域名全部指向 `.18`**，证书链校验通过 |
+
+过程中 `backup/` 里的两个 .repo **一字未动** —— 0.4.2 那条「不许改写备份」
+的修复在真机上得到印证（改前脚本会去"修"它们）。
+
 ## [0.4.3] - 2026-09-24
 
 ### 修复（承接 0.4.2 的巡检，把「说不清」的状态说清）

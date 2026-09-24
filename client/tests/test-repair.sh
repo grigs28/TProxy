@@ -230,6 +230,67 @@ else
   fail=1
 fi
 
+echo "== 已下线的 Nexus 路径（不只是 debian-proxy 那一条）=="
+# 实测 .16：/etc/yum.repos.d/nexus-openeuler.repo 里挂着
+#   baseurl=http://192.168.0.18:8081/repository/openEuler-24.03-OS/
+#   baseurl=http://192.168.0.18/repository/openEuler-24.03-update/
+# 旧 Nexus 下线后一律不可达，dnf makecache 直接
+#   Curl error (7): Couldn't connect to server ... port 8081
+# 而原判据只有 `repository/debian-proxy`（apt 侧那一条）—— 这些漏网，
+# 脚本还会报「正常」。
+mkdir -p "$T/nx/yum.repos.d"
+cat > "$T/nx/yum.repos.d/nexus-openeuler.repo" <<'EOF'
+[nexus-openeuler-os]
+name=Nexus openEuler OS
+baseurl=http://192.168.0.18:8081/repository/openEuler-24.03-OS/
+enabled=1
+
+[nexus-openeuler-update]
+name=Nexus openEuler update
+baseurl=http://192.168.0.18/repository/openEuler-24.03-update/
+enabled=1
+
+[OS]
+name=OS
+baseurl=https://repo.openeuler.org/openEuler-24.03-LTS-SP3/OS/x86_64/
+enabled=1
+EOF
+n=$(dead_nexus_repos "$T/nx/yum.repos.d" | wc -l)
+if [[ "$n" -eq 1 ]]; then
+  echo "  ✅ 检出含死 Nexus 路径的 repo 文件"
+else
+  echo "  ❌ 期望检出 1 个文件，实际 $n"
+  fail=1
+fi
+BACKUP_DIR="$T/bk" repair_dnf_repos "$T/nx/yum.repos.d" >/dev/null
+if [[ -z "$(dead_nexus_repos "$T/nx/yum.repos.d")" ]]; then
+  echo "  ✅ 已处理（不再有启用的死 Nexus 仓库）"
+else
+  echo "  ❌ 死 Nexus 仓库仍启用 —— dnf 会继续报错"
+  fail=1
+fi
+if command grep -q "openEuler-24.03-LTS-SP3/OS/x86_64/" "$T/nx/yum.repos.d/nexus-openeuler.repo"; then
+  echo "  ✅ 正常的 openEuler 源未被波及"
+else
+  echo "  ❌ 误伤了正常的源"
+  fail=1
+fi
+
+echo "== 不该误判：镜像站的 /repository/ 不是 Nexus =="
+mkdir -p "$T/nx2/yum.repos.d"
+cat > "$T/nx2/yum.repos.d/ok.repo" <<'EOF'
+[ok]
+name=正常仓库
+baseurl=https://mirrors.aliyun.com/repository/openeuler/
+enabled=1
+EOF
+if [[ -z "$(dead_nexus_repos "$T/nx2/yum.repos.d")" ]]; then
+  echo "  ✅ 公网镜像站没被误判（判据要求是【内网 IP】+ /repository/）"
+else
+  echo "  ❌ 误判了公网镜像站"
+  fail=1
+fi
+
 echo "== 检出启用中的企业版源（非订阅会 401）=="
 mkdir -p "$T/d"
 cat > "$T/d/pve-enterprise.sources" <<'EOF'
@@ -304,6 +365,7 @@ for fn in dead_proxy_sources pve_sources_content ceph_sources_content \
           codename_mismatch git_redirects enterprise_sources \
           duplicate_suite_lines \
           disable_enterprise_sources dnf_metalink_sources \
+          dead_nexus_repos disable_dead_nexus_repos \
           dnf_redundant_repos repair_dnf_repos is_rpm_like; do
   if grep -q "^${fn}()" "$DIR/lib/repair.sh" && grep -q "^${fn}()" "$DIR/dist/tp.client.sh"; then
     echo "  ✅ 两份都有 $fn"

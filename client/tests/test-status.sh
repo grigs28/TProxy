@@ -80,6 +80,39 @@ else
   fail=1
 fi
 
+echo "== 修复判据必须列全所有检测项（本项目犯过三次的错）=="
+# 症状固定：**报了问题 → 却说「正常」→ 修复压根没跑**。
+# 实测 .16：metalink 与冗余段上一轮已修好（m、r 皆空），只剩死 Nexus 非空，
+# 而判据当初只写 `-n "$m" || -n "$r"` → 打了警告又报「dnf 源正常」，
+# repair_dnf_repos 从未被调用，死 Nexus 一直启用着。
+#
+# 所以这里断言：**报出来的每一项，都必须在修复判据里出现**。
+_body=$(sed -n '/^check_system_repo()/,/^}/p' "$SCRIPT")
+_dnf_guard=$(command grep -E 'if \[\[ -n "\$nx"' <<<"$_body")
+if [[ -n "$_dnf_guard" ]] && command grep -q '\-n "\$m"' <<<"$_dnf_guard" \
+   && command grep -q '\-n "\$r"' <<<"$_dnf_guard"; then
+  echo "  ✅ dnf 判据含全部三项（nx / m / r）"
+else
+  echo "  ❌ dnf 判据没列全 —— 会「报问题却说正常且不修」"
+  echo "     实际: $_dnf_guard"
+  fail=1
+fi
+# apt 侧：dead / dup 在判据里，企业源是内联修的（不需要进判据），
+# 但要保证「只修了企业源」时不会再补一句「apt 源正常」
+_apt_guard=$(command grep -E 'if \[\[ -n "\$dead" \|\| -n "\$dup"' <<<"$_body")
+if [[ -n "$_apt_guard" ]]; then
+  echo "  ✅ apt 判据含 dead / dup"
+else
+  echo "  ❌ apt 判据不见了 —— 结构变了，本测试要跟着改"
+  fail=1
+fi
+if command grep -qE 'elif \[\[ -n "\$ent" \]\]' <<<"$_body"; then
+  echo "  ✅ 只修企业源时不再误报「apt 源正常」"
+else
+  echo "  ❌ 只修企业源时会接着说「apt 源正常」—— 明明刚动过东西"
+  fail=1
+fi
+
 rm -rf "$T"
 if [[ $fail -eq 0 ]]; then echo "STATUS-PASS"; else echo "STATUS-FAIL"; fi
 exit $fail
