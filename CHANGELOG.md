@@ -12,6 +12,29 @@
 
 ---
 
+## [0.4.0] - 2026-09-24
+
+### 修复（我引入的两处损坏，试点时暴露）
+- **Docker 标准化会删掉功能键**。上一版按「保留 data-root、其余替换成标准」
+  实现，实测在 `.71`（`ai02`，AI 机器）上把
+  `runtimes.nvidia` = `nvidia-container-runtime` **删掉了** ——
+  那台机器的 **GPU 容器会直接不可用**；`dns` 也被删。
+  根因是把 daemon.json 的键当成一类处理，而它其实分两类：
+  **风格**（日志格式、cgroup 驱动）标准化有意义，
+  **功能**（runtimes / dns / bip / insecure-registries / data-root …）
+  逐机配的，删掉就是故障。
+  改为**从原配置原样保留开始，只设标准键 + 只删 registry-mirrors**
+- **Java cacerts 会扫进容器镜像层**。`install_java_ca` 里 `find /opt`
+  在 Docker data-root 位于 `/opt` 下时（`.71` 是 `/opt/docker`）会扫进
+  `overlay2/` —— 那里是**容器自己的** JDK，改它们既无意义（容器不用宿主机的
+  认证），又在动别人的镜像层。已排除 `*/overlay2/*`
+
+### 验证
+- `.71` 重跑后：`runtimes`(nvidia) / `dns` / `data-root` 全部保留，
+  `registry-mirrors` 移除，标准键已设
+- 新增回归用例专门守住 `runtimes`/`dns` 不被删
+- Java 侧：不再出现 overlay2 路径
+
 ## [0.3.9] - 2026-09-24
 
 ### 新增

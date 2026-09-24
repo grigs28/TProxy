@@ -67,8 +67,9 @@ DOCKER_STD_LOG_OPTS='{"max-size": "50m", "max-file": "5"}'
 DOCKER_STD_EXEC_OPTS='["native.cgroupdriver=systemd"]'
 DOCKER_STD_STORAGE_DRIVER="overlay2"
 
-# 标准之外、且不是 data-root 的键 —— 标准化时会被替换掉。
-# 单独列出来是为了**在被丢弃前报给用户**：无声消失的配置最难查。
+# 标准之外的键。标准化时**原样保留**，只列出来告知用户。
+# 早先的版本会把这些替换掉 —— 那删掉过 ai02 的 runtimes.nvidia，
+# 会让 GPU 容器不可用。功能键不能按"统一配置"处理。
 docker_conf_extra_keys() {
   local f="${1:-$DOCKER_DAEMON_JSON}"
   [[ -f "$f" ]] || return 0
@@ -109,7 +110,6 @@ docker_conf_is_standard() {
   [[ -f "$f" ]] || return 0
   docker_conf_valid "$f" || return 1
   [[ -z "$(docker_conf_mirrors "$f")" ]] || return 1
-  [[ -z "$(docker_conf_extra_keys "$f")" ]] || return 1
 
   local drv
   drv=$(docker_conf_storage_driver "$f")
@@ -155,16 +155,22 @@ import json, os, sys
 with open(sys.argv[1], encoding="utf-8") as fh:
     old = json.load(fh)
 
-new = {}
-# data-root：只保留，不设定 —— 改了会让现有容器与镜像「消失」
-if isinstance(old.get("data-root"), str):
-    new["data-root"] = old["data-root"]
+# ⚠️ 从原配置**原样保留**开始，只动该动的。
+#
+# 不能"清空后只写标准键"：daemon.json 里的键分两类 ——
+# 一类是风格（日志格式、cgroup 驱动），标准化它们有意义；
+# 另一类是**功能**（runtimes / dns / bip / insecure-registries / data-root …），
+# 它们是逐机配的，删掉就是故障。
+# 实测代价：在一台 AI 机器（ai02）上照「其余替换成标准」执行，
+# 把 runtimes.nvidia 删掉了 —— 那台机器的 GPU 容器会直接不可用。
+new = dict(old)
+new.pop("registry-mirrors", None)   # 只删它：会让 Docker Hub 拉取绕过本地缓存
 
 new["log-driver"] = os.environ["STDD_LOG"]
 new["log-opts"] = json.loads(os.environ["STDD_LOGO"])
 new["exec-opts"] = json.loads(os.environ["STDD_EXECO"])
 
-# storage-driver 同理：本机已是别的驱动就保留，强行改会让镜像「消失」
+# storage-driver 条件保留：本机已是别的驱动就别改，改了镜像会「消失」
 cur = old.get("storage-driver")
 drv = os.environ["STDD_DRV"]
 new["storage-driver"] = cur if (isinstance(cur, str) and cur != drv) else drv

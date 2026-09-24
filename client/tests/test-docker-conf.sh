@@ -80,6 +80,27 @@ else
     echo "  ❌ data-root 被动过了 —— 改它会让容器全部「消失」"
     fail=1
 fi
+echo "== 回归：runtimes / dns 这类功能键绝不能被删（ai02 踩过）=="
+cat > "$T/rt.json" <<'EOF'
+{
+  "data-root": "/opt/docker",
+  "registry-mirrors": ["https://docker.1ms.run"],
+  "runtimes": {"nvidia": {"args": [], "path": "nvidia-container-runtime"}},
+  "dns": ["223.5.5.5", "114.114.114.114"]
+}
+EOF
+docker_conf_normalize "$T/rt.json" >/dev/null
+python3 - "$T/rt.json" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1]))
+assert "runtimes" in d, "runtimes 被删了 —— GPU 容器会不可用"
+assert d["runtimes"]["nvidia"]["path"]=="nvidia-container-runtime"
+assert "dns" in d, "dns 被删了"
+assert "registry-mirrors" not in d
+print("  ✅ runtimes / dns 保留，mirrors 移除")
+PY
+[[ $? -eq 0 ]] || fail=1
+
 echo "== 先判断：没有 mirrors 时一个字节都不动 =="
 printf '{\n  "data-root": "/opt/docker"\n}\n' > "$T/c.json"
 before=$(md5sum "$T/c.json" | cut -d' ' -f1)
@@ -136,8 +157,12 @@ assert d.get("log-driver")=="json-file", "log-driver 应换成标准值"
 assert d.get("log-opts")=={"max-size":"50m","max-file":"5"}, f"log-opts 不对: {d.get('log-opts')}"
 assert d.get("exec-opts")==["native.cgroupdriver=systemd"], f"exec-opts 不对: {d.get('exec-opts')}"
 assert d.get("storage-driver")=="overlay2"
-assert "bip" not in d and "insecure-registries" not in d, "非标准键应被替换掉"
-print("  ✅ data-root 保留，其余已标准化")
+# 非标准键**原样保留** —— 它们是功能键，不是风格。
+# 早先的版本会把它们替换掉，实测删掉过 ai02 的 runtimes.nvidia，
+# 那台 AI 机器的 GPU 容器会直接不可用。
+assert d.get("bip") == "172.17.0.1/16", f"bip 被删了: {d.get('bip')}"
+assert d.get("insecure-registries") == ["192.168.0.36:5000"], "insecure-registries 被删了"
+print("  ✅ data-root 保留、功能键保留、标准键已设")
 PY
 [[ $? -eq 0 ]] || fail=1
 

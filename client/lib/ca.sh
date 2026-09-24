@@ -187,7 +187,12 @@ install_java_ca() {
       [[ "$k" == "$found" ]] && dup=1 && break
     done
     [[ $dup -eq 0 ]] && keystores+=("$found")
-  done < <(find /usr/lib/jvm /opt -name cacerts -path '*security*' 2>/dev/null)
+  # ⚠️ 排除容器镜像层目录（*/overlay2/*）。
+  # 当 Docker 的 data-root 在 /opt 下（实测 ai02 就是 /opt/docker）时，
+  # `find /opt` 会扫进 overlay2 —— 那里是**容器自己的** JDK，
+  # 改它们既无意义（容器不用宿主机的认证），又在动别人的镜像层。
+  done < <(find /usr/lib/jvm /opt -name cacerts -path '*security*' \
+             -not -path '*/overlay2/*' 2>/dev/null)
 
   if [[ ${#keystores[@]} -eq 0 ]]; then
     echo "未找到 JDK cacerts，跳过"
