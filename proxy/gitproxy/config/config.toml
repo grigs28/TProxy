@@ -1,0 +1,46 @@
+# Git 智能 HTTP 缓存（smart-git，Go 版）
+#
+# 替代原 gitcache。为什么换：
+#
+#   ① gitcache **缓存一次后永不刷新**（官方 README 无 TTL 特性）。
+#      实测 kubernetes：走缓存 30536385… vs 真 GitHub bba12b9f…，
+#      镜像 mtime 停在 16 小时前，两次请求纹丝不动。
+#      后果就是「机器拉不到新代码」—— .14 的症状。
+#
+#   ② gitcache 对私有仓库返回 **200 + "Repository not found."**，
+#      git 把空 ref 列表当成「空仓库、无变化」→ 静默、退出码 0。
+#      **静默失败是最危险的形态**：用户以为拉过了。
+#      smart-git 在这种情况返回 500，git 会报错。
+#
+# 刷新策略（成本敏感：回源要翻墙，流量是花钱的）：
+#
+#   expire   缓存有效期。到期后**下一次请求**触发与上游同步（不是后台定时全量刷）。
+#   expireEx **上游未变化（Hash 未变）时**为缓存额外延长的时间。
+#            —— 这是省流量的关键：没变就不必反复拉。
+#
+# 实测一次「无变化」同步的开销 = 一次 ref 广告：
+#   自己那批业务仓库  每个仅 57~784 字节   → 每小时刷一个月 < 1 MB
+#   kubernetes 这类   一个就 7.8 MB        → 所以巨型上游仓库不该进缓存
+#
+# 私有仓库不经过这里：tengine 把「带 Authorization」与 push 的流量分流为直连，
+# 且缓存层 5xx 时会回落直连（见 tengine/conf.d/git.conf 里的 error_page）。
+
+[server]
+# 只监听本机，由 tengine 反代 —— 不对外暴露。
+# 原 gitcache 也是 127.0.0.1:4999 这个路子。
+host = "127.0.0.1"
+port = 8080
+baseDir = "/data/smart-git/repos"
+memLimit = 0
+
+[log]
+logfilepath = "/data/smart-git/log/smart-git.log"
+maxlogsize = 5
+level = "info"
+
+[Database]
+path = "/data/smart-git/db/smart-git.db"
+
+[cache]
+expire = "30m"
+expireEx = "4h"

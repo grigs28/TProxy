@@ -12,6 +12,79 @@
 
 ---
 
+## [0.4.8] - 2026-09-24
+
+### 更换 Git 缓存层：gitcache → smart-git（并加 5xx 回落）
+
+**起因**：`.14` 拉不到新代码。2026-09-24 的巡检查明真因（详见
+`docs/2026-09-24-git缓存方案对比与试验.md`），三层：
+
+1. **`gitcache` 缓存一次后永不刷新**（官方 README 无 TTL 特性）。
+   实测 kubernetes：走缓存 `30536385…` vs 真 GitHub `bba12b9f…`，
+   镜像 mtime 停在 16 小时前，两次请求纹丝不动。
+2. **git 不会预先发 Authorization**（`GIT_CURL_VERBOSE` 实测 0 次）——
+   它只在收到 **401 挑战**时才发凭据。而 gitcache 对私有仓库返回的是
+   **`200` + `"Repository not found."`（21 字节）**，git 把空 ref 列表当成
+   「空仓库、无变化」→ **静默、退出码 0**。**静默失败是最危险的形态。**
+3. 于是 tengine 里「带凭据 → 直连上游」那条分支**对 git 形同虚设**。
+
+**改动**
+
+- `proxy/docker-compose.yml`：`gitcache` 服务 → `gitproxy`（`v3-gitproxy`，
+  `wjqserver/smart-git:latest`，Go 版，`127.0.0.1:8080`）。
+  ⚠️ Rust 版（`smart-git-rs`）在本环境**镜像拉取失败**（已排除 CA/网络/DNS/URL
+  形态，`RUST_LOG=debug` 无更多信息），故用 Go 版。
+- `proxy/gitproxy/config/config.toml`（新）：`expire = "30m"`、`expireEx = "4h"`。
+  **`expireEx` 是省流量的关键** —— 上游未变化时延长有效期，不必反复拉。
+  实测一次「无变化」同步 = 一次 ref 广告：自己那批仓库每个 57~784 字节，
+  而 kubernetes 一个就 7.8 MB（所以巨型上游仓库不该进缓存）。
+- `proxy/tengine/conf.d/git.conf`：
+  - 缓存分支指向 `127.0.0.1:8080`，并**新增 `$git_cache_uri` 映射去掉 `.git`**
+    （smart-git 的路径是 `/<owner>/<repo>`，它自己补 `.git`；给成 `x.git` 会请求
+    `x.git.git`。原 gitcache 相反，要 `/<域名>/<owner>/<repo>` —— 换组件这里最易踩）
+  - **新增 5xx 回落**：`proxy_intercept_errors on` +
+    `error_page 500 502 503 504 = @git_direct`
+  - 回落点 `@git_direct` **不设** `proxy_intercept_errors`，避免内部重定向自环
+
+### 为什么 5xx 回落是关键
+
+git 只认 401 挑战才发凭据。私有仓库走缓存层时缓存层自己匿名去上游、拿不到，
+返回的是非 401 的错误（500）—— git 永远不发凭据。
+回落直连后真 GitHub 回 **401** → git 才把凭据发出来 → 成功。
+
+实测对照（同一台机、同一个私有仓库 `grigs28/sxbot`）：
+
+| | 结果 |
+|---|---|
+| 改前 gitcache | `200` + `Repository not found.` → git **静默、退出码 0** |
+| 改后（匿名） | `401` → git **明确报错** `could not read Username` |
+| 改后（带凭据） | `200`，拿到 6 个 ref ✓ |
+
+且 **`sxbot` 不会进共享缓存** —— 私有仓库经回落直连，内容不落地。
+
+### 验证（gitcache 已停，证明不依赖它）
+
+| 测试 | 结果 |
+|---|---|
+| 公有仓库（经 tengine） | `c5b3f123…` = 真 GitHub ✓ |
+| 私有仓库·匿名 | 明确报错，不静默 ✓ |
+| 私有仓库·带凭据 | 拿到 ref ✓ |
+| push | 直连真 GitHub，日志见 `401`（未走缓存层）✓ |
+
+`v3-gitcache` 已停（容器保留便于回退），缓存 **9.7 GB → 0**
+（其中大部分是验证时顺手拉进来的 kubernetes/git/octocat 等巨型上游仓库）。
+
+### 回退
+
+```bash
+# ① 恢复 tengine 与 compose
+git checkout <本提交前> -- proxy/tengine/conf.d/git.conf proxy/docker-compose.yml
+# ② 起回 gitcache
+docker start v3-gitcache
+cd /opt/TProxy/proxy && docker compose exec -T tengine nginx -s reload
+```
+gitcache 的缓存在被清后会**按需重建**（首次 clone 重新回源）。
+
 ## [0.4.7] - 2026-09-24
 
 ### 新增：pip / npm / git 的「死 Nexus」清理（`tp.client.sh` → 0.2.4）

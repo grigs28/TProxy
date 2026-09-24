@@ -180,19 +180,29 @@ services:
       - 223.5.5.5
       - 223.6.6.6
 
-  # git 仓库缓存。本地构建（Go 编译），首次 up 需数分钟。
-  # 监听 127.0.0.1:4999，只对 tengine 暴露。
-  gitcache:
-    build:
-      context: ./gitcache
-      dockerfile: Dockerfile
-    image: tproxy/gitcache:local
-    container_name: v3-gitcache
+  # Git 智能 HTTP 缓存（smart-git，Go 版）。
+  # 监听 127.0.0.1:8080，只对 tengine 暴露。
+  #
+  # 2026-09-24 由原 gitcache 换来。原组件有两个硬伤：
+  #   ① **缓存一次后永不刷新**（无 TTL）—— 实测 kubernetes 停在 16 小时前，
+  #      表现为「机器拉不到新代码」（.14 的症状）
+  #   ② 对私有仓库返回 **200 + "Repository not found."** → git 当成
+  #      「空仓库、无变化」→ **静默、退出码 0**。静默失败最危险。
+  # smart-git 有 TTL 自动刷新，且失败会明确报错（500/403）。
+  #
+  # 回退：把这段换回 gitcache（见 git 历史），并改回 tengine/conf.d/git.conf
+  #       的 `127.0.0.1:4998` → `127.0.0.1:4999`。
+  # ⚠️ 用 Rust 版（wjqserver/smart-git-rs）在本环境**镜像拉取失败**，故用 Go 版。
+  gitproxy:
+    image: wjqserver/smart-git:latest
+    container_name: v3-gitproxy
     restart: unless-stopped
     network_mode: host
     volumes:
-      - ${CACHE_BASE}/git:/var/gitcache
-    command: ["-b", "/var/gitcache", "-p", "4999"]
+      - ./gitproxy/config:/data/smart-git/config
+      - ${CACHE_BASE}/gitproxy/repos:/data/smart-git/repos
+      - ${CACHE_BASE}/gitproxy/db:/data/smart-git/db
+      - ${CACHE_BASE}/gitproxy/log:/data/smart-git/log
     dns:
       - 223.5.5.5
       - 223.6.6.6
