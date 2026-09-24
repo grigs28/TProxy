@@ -291,6 +291,58 @@ else
   fail=1
 fi
 
+echo "== PVE 源必须【只剩一份】定义（真机 .98 上出现了三份）=="
+# 实测 .98：同一仓库同时有
+#     pve.list                    deb http://download.proxmox.com/debian/pve trixie pve-no-subscription
+#     pve-no-subscription.sources （deb822，早就存在）
+#     proxmox.sources             （脚本刚生成的 —— **帮倒忙**）
+# apt 会对每条发 W: configured multiple times，且元数据被拉多遍。
+# 原逻辑只认 `pve-no-subscription.list` 这一个文件名，且不看是否已有等价定义就新建。
+mkdir -p "$T/p98"
+cat > "$T/p98/pve-no-subscription.sources" <<'EOF'
+Types: deb
+URIs: http://download.proxmox.com/debian/pve
+Suites: trixie
+Components: pve-no-subscription
+Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+EOF
+printf 'deb http://download.proxmox.com/debian/pve trixie pve-no-subscription\n' > "$T/p98/pve.list"
+cat > "$T/p98/pve-ceph.sources" <<'EOF'
+Types: deb
+URIs: http://download.proxmox.com/debian/ceph-squid
+Suites: trixie
+Components: no-subscription
+EOF
+BACKUP_DIR="$T/bk" repair_apt_sources "$T/empty-sources.list" "$T/p98" trixie >/dev/null 2>&1
+n=$(pve_source_files "$T/p98" | wc -l)
+if [[ "$n" -eq 1 ]]; then
+  echo "  ✅ 修后只剩 1 份（$(pve_source_files "$T/p98" | xargs -n1 basename | tr '\n' ' ')）"
+else
+  echo "  ❌ 修后仍有 $n 份："
+  pve_source_files "$T/p98" | sed 's/^/       /'
+  fail=1
+fi
+if [[ -f "$T/p98/pve-ceph.sources" ]]; then
+  echo "  ✅ Ceph 源（另一个仓库）未被波及"
+else
+  echo "  ❌ 误删了 Ceph 源"
+  fail=1
+fi
+
+echo "== 已有一份时不该再新建（幂等）=="
+mkdir -p "$T/p99"
+cp "$T/p98/pve-no-subscription.sources" "$T/p99/" 2>/dev/null || \
+  printf 'Types: deb\nURIs: http://download.proxmox.com/debian/pve\nSuites: trixie\nComponents: pve-no-subscription\n' > "$T/p99/pve-no-subscription.sources"
+before=$(pve_source_files "$T/p99" | wc -l)
+BACKUP_DIR="$T/bk" repair_apt_sources "$T/empty-sources.list" "$T/p99" trixie >/dev/null 2>&1
+after=$(pve_source_files "$T/p99" | wc -l)
+if [[ "$before" -eq 1 && "$after" -eq 1 ]]; then
+  echo "  ✅ 仍是一份"
+else
+  echo "  ❌ $before → $after 份（重复执行不该增加）"
+  fail=1
+fi
+
 echo "== 检出启用中的企业版源（非订阅会 401）=="
 mkdir -p "$T/d"
 cat > "$T/d/pve-enterprise.sources" <<'EOF'
@@ -365,7 +417,7 @@ for fn in dead_proxy_sources pve_sources_content ceph_sources_content \
           codename_mismatch git_redirects enterprise_sources \
           duplicate_suite_lines \
           disable_enterprise_sources dnf_metalink_sources \
-          dead_nexus_repos disable_dead_nexus_repos \
+          dead_nexus_repos disable_dead_nexus_repos pve_source_files \
           dnf_redundant_repos repair_dnf_repos is_rpm_like; do
   if grep -q "^${fn}()" "$DIR/lib/repair.sh" && grep -q "^${fn}()" "$DIR/dist/tp.client.sh"; then
     echo "  ✅ 两份都有 $fn"

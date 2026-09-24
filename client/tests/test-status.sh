@@ -100,6 +100,12 @@ fi
 # apt 侧：dead / dup 在判据里，企业源是内联修的（不需要进判据），
 # 但要保证「只修了企业源」时不会再补一句「apt 源正常」
 _apt_guard=$(command grep -E 'if \[\[ -n "\$dead" \|\| -n "\$dup"' <<<"$_body")
+if command grep -q 'pve_needs_repair' <<<"$_body"; then
+  echo "  ✅ apt 判据含 pve_needs_repair（报告方与修复方共用同一判据）"
+else
+  echo "  ❌ apt 判据没有 pve_needs_repair —— 会「报问题却说正常且不修」（本项目犯过四次）"
+  fail=1
+fi
 if [[ -n "$_apt_guard" ]]; then
   echo "  ✅ apt 判据含 dead / dup"
 else

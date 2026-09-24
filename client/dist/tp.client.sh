@@ -47,7 +47,7 @@
 #        不依赖 wget.sh —— 直接用系统 wget 取文件
 #  版本号：每次修改递增，10 进位
 # ============================================================
-VERSION="0.2.2"
+VERSION="0.2.3"
 
 # ⚠️ **必须先 source、后 `set -u`** —— 顺序反了会在某些机器上直接静默退出。
 #
@@ -819,6 +819,46 @@ duplicate_suite_lines() {
   done < "$f"
 }
 
+# 判断：`/etc/apt/sources.list.d/` 下哪些文件提供了 **PVE 无订阅源**。
+#
+# 两种格式都算：deb822（`URIs: http://download.proxmox.com/debian/pve` +
+# `Components: pve-no-subscription`）与单行（`deb … pve-no-subscription`）。
+# 文件名不作数 —— 实测有 `pve.list` / `pve-no-subscription.sources` /
+# `proxmox.sources` 三种叫法，只按文件名找必然漏。
+#
+# 双重匹配（仓库 URL **且** pve-no-subscription）以排除 `pve-ceph.sources`
+# 那类「同一个 Proxmox、另一个仓库」的文件。
+pve_source_files() {
+  local d="${1:-$APT_SOURCES_D}" f
+  for f in "$d"/*.sources "$d"/*.list; do
+    [[ -f "$f" ]] || continue
+    grep -qE 'download[.]proxmox[.]com/debian/pve' "$f" 2>/dev/null || continue
+    grep -qE 'pve-no-subscription' "$f" 2>/dev/null || continue
+    printf '%s\n' "$f"
+  done
+}
+
+# 判断：PVE 无订阅源**是否需要规范化**（多于一份 / codename 不符 / 还是单行 .list）。
+#
+# ⚠️ 这个函数存在的意义是**从结构上消灭一类反复犯的错**：
+# 「报出来了」和「判据里有没有」是两处独立的代码，加检测项时容易只改前者 ——
+# 症状是「报了问题、却说正常、修复压根没跑、下次再报」。本项目已经犯过四次
+# （apt 漏「重复」、dnf 漏「metalink」、dnf 漏「死 Nexus」、apt 漏「PVE 源重复」）。
+# 所以现在**报告方与修复方共用这一个判据**，不存在「忘了同步」的可能。
+pve_needs_repair() {
+  local d="${1:-$APT_SOURCES_D}" codename="${2:-$(detect_codename)}"
+  local pv n=0 need=0 f
+  pv=$(pve_source_files "$d")
+  [[ -n "$pv" ]] && n=$(grep -c . <<<"$pv")
+  (( n > 1 )) && need=1
+  while read -r f; do
+    [[ -n "$f" ]] || continue
+    codename_mismatch "$f" "$codename" && need=1
+    grep -q "^deb " "$f" 2>/dev/null && need=1   # 单行 .list 格式
+  done <<< "$pv"
+  [[ $need -eq 1 ]]
+}
+
 # 某个发行版 suite 是否已由 .sources（deb822）文件提供。
 # 用于判断一条死源行是「改成别的地址」还是「直接删掉」。
 _suite_provided_by_sources() {
@@ -882,19 +922,40 @@ repair_apt_sources() {
     did=1
   fi
 
-  # ② PVE 源：旧 .list 或 codename 不符 → 按官方 deb822 重建
-  local legacy="$d/pve-no-subscription.list"
-  if [[ -f "$legacy" ]] && { codename_mismatch "$legacy" "$codename" \
-        || grep -q "^deb " "$legacy" 2>/dev/null; }; then
-    local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/apt"
+  # ② PVE 无订阅源：保证**只剩一份**定义。
+  #
+  # ⚠️ 原逻辑只认 `pve-no-subscription.list` 这一个**文件名**，而且
+  # **不看是否已有等价定义就直接新建** —— 实测在 `.98` 上帮了倒忙：
+  # 那台机器本来就有 `pve-no-subscription.sources` 与 `pve.list` 两份，
+  # 脚本又生成了第三份 `proxmox.sources`，apt 于是满屏
+  # `W: ... configured multiple times`，元数据被拉多遍。
+  #
+  # 所以改为：先**枚举所有提供者**（deb822 与单行格式都算），
+  # 需要规范化时（多于一份 / codename 不符 / 还是单行格式）
+  # 才统一收敛成一份 `proxmox.sources`，其余备份后移走。
+  local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/apt"
+  local pv="" f
+  # 判据与 check_system_repo / show_status 共用同一个函数（见 pve_needs_repair）
+  if pve_needs_repair "$d" "$codename"; then
+    pv=$(pve_source_files "$d")
     mkdir -p "$bk" 2>/dev/null || true
-    mv "$legacy" "$bk/pve-no-subscription.list.$(date +%s)" 2>/dev/null || true
+    while read -r f; do
+      [[ -n "$f" ]] || continue
+      cp -a "$f" "$bk/$(basename "$f").$(date +%s)" 2>/dev/null || true
+      [[ "$(basename "$f")" == "proxmox.sources" ]] && continue
+      rm -f "$f"
+    done <<< "$pv"
     pve_sources_content "$codename" > "$d/proxmox.sources" || return 1
-    # Ceph 源若原本存在（无论在 .list 还是 .sources），一并按 trixie 重建
-    if [[ -f "$d/ceph.list" ]] || [[ -f "$d/ceph.sources" ]]; then
-      [[ -f "$d/ceph.list" ]] && mv "$d/ceph.list" "$bk/ceph.list.$(date +%s)" 2>/dev/null || true
-      ceph_sources_content "$codename" > "$d/ceph.sources" || return 1
-    fi
+    did=1
+  fi
+
+  # Ceph 源：同样只在「是单行 .list」或「codename 不符」时规范化，
+  # 已是正确的 deb822 就一个字节都不动（避免无谓 churn）
+  local ceph="$d/ceph.list"
+  if [[ -f "$ceph" ]] || { [[ -f "$d/ceph.sources" ]] && codename_mismatch "$d/ceph.sources" "$codename"; }; then
+    mkdir -p "$bk" 2>/dev/null || true
+    [[ -f "$ceph" ]] && { cp -a "$ceph" "$bk/ceph.list.$(date +%s)" 2>/dev/null || true; rm -f "$ceph"; }
+    ceph_sources_content "$codename" > "$d/ceph.sources" || return 1
     did=1
   fi
 
@@ -990,6 +1051,15 @@ check_system_repo() {
             fi
         fi
 
+        # PVE 无订阅源多于一份（实测 .98 上同时有 .list / .sources / 脚本生成的）
+        if pve_needs_repair "$APT_SOURCES_D" "$cn"; then
+            print_warning "  PVE 无订阅源有 %s 份定义（apt 会告警、元数据拉多遍）：" \
+                "$(pve_source_files "$APT_SOURCES_D" | grep -c .)"
+            while read -r l; do
+                [[ -n "$l" ]] && print_info "    %s" "$l"
+            done <<< "$(pve_source_files "$APT_SOURCES_D")"
+        fi
+
         # 重复配置也要报：apt 会对每条重复源发 W:，且元数据被拉两遍
         local dup
         dup=$(duplicate_suite_lines)
@@ -1001,7 +1071,11 @@ check_system_repo() {
             done <<< "$dup"
         fi
 
-        if [[ -n "$dead" || -n "$dup" ]] \
+        # ⚠️ 判据必须与**报出来的每一项**一一对应。
+        # 这里漏过四次（apt 漏「重复」、dnf 漏「metalink」、dnf 漏「死 Nexus」、
+        # apt 漏「PVE 源重复」），症状固定是「报了问题、却说正常、修复没跑」。
+        # 现在 PVE 那项直接复用 pve_needs_repair —— 报告方与修复方同一判据。
+        if [[ -n "$dead" || -n "$dup" ]] || pve_needs_repair "$APT_SOURCES_D" "$cn" \
            || { [[ -f "$legacy" ]] && codename_mismatch "$legacy" "$cn"; }; then
             if repair_apt_sources; then
                 print_success "  已修复（原文件备份在 %s/apt/）" "$BACKUP_DIR"
