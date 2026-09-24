@@ -53,6 +53,10 @@ Copyright (c) 2026 grigs28
 - 死 Nexus 路径的判据原本只认 `repository/debian-proxy`（apt 侧一条），
   dnf 侧漏网 —— `.16` 上 `dnf makecache` 一直报 `Curl error (7)` 而脚本报「正常」。
   改为「内网 IP + `/repository/`」并按段停用
+- **`set -u` 开在 `source bas.sh` 之前导致静默死亡**：bas.sh 读 `$LANG`，
+  而 `.17`（OpenWrt）没有该变量；`set -u` 下这会退出整个 shell，
+  `2>/dev/null` 吞掉原因、`|| 兜底` 也拦不住 → 表现为「无输出、退出码 1」。
+  改为先 source、加载完再收紧 shell 选项
 - **修复判据漏了新检测项**（报问题 → 却说正常 → 修复没跑）。这个错已犯三次
   （apt 漏「重复」、dnf 漏「metalink」、这次漏「死 Nexus」），已加回归守卫
 - **`client/dist/tp.client.sh` 纳入版本控制** —— 它被 `.gitignore` 第 9 行的

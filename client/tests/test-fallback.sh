@@ -99,6 +99,20 @@ for c in "print_info '纯文本'" "print_info" "print_step ''" "print_success 'a
 done
 [[ $fail -eq 0 ]] && echo "  ✅ 边界情况不崩"
 
+echo "== 「先 source、后 set -u」的顺序不许颠倒 =="
+# bas.sh 是按「没有 set -u」写的（实测它的第 44 行读 `$LANG`，而 .17 上没这个
+# 变量）。在 set -u 下引用未定义变量会让 bash **退出整个 shell** —— 不是返回
+# 非零，所以 `|| { 兜底 }` 拦不住，`2>/dev/null` 又把原因吞了。
+# 症状：脚本无输出、退出码 1。顺序反过来就复现。
+_src_line=$(command grep -n '^source /opt/grigs/bas\.sh' "$SCRIPT" | cut -d: -f1)
+_setu_line=$(command grep -n '^set -uo pipefail' "$SCRIPT" | head -1 | cut -d: -f1)
+if [[ -n "$_src_line" && -n "$_setu_line" && "$_setu_line" -gt "$_src_line" ]]; then
+  echo "  ✅ set -u 在第 ${_setu_line} 行，source 在第 ${_src_line} 行（source 在前）"
+else
+  echo "  ❌ 顺序不对（source=$_src_line, set -u=$_setu_line）—— .17 那类机器会静默退出"
+  fail=1
+fi
+
 echo "== 两份实现不许分叉：脚本里仍要有兜底块 =="
 if command grep -q '^source /opt/grigs/bas\.sh' "$SCRIPT" && command grep -q 'print_color()' "$T/fallback.sh"; then
   echo "  ✅ 兜底块完好"

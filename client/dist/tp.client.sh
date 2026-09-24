@@ -47,9 +47,17 @@
 #        不依赖 wget.sh —— 直接用系统 wget 取文件
 #  版本号：每次修改递增，10 进位
 # ============================================================
-VERSION="0.2.1"
-set -uo pipefail
+VERSION="0.2.2"
 
+# ⚠️ **必须先 source、后 `set -u`** —— 顺序反了会在某些机器上直接静默退出。
+#
+# 实测 `.17`（istoreos / OpenWrt）：`bash bas.sh` 里第 44 行读了 **`$LANG`**，
+# 而那台机器没有这个变量。在 `set -u` 下引用未定义变量会让 **bash 退出整个
+# shell**（不是返回非零）—— 于是：
+#   · `2>/dev/null` 把「LANG: unbound variable」吞掉，什么也看不见
+#   · `|| { 兜底 }` **永远等不到**（`exit` 级的终止，`||` 拦不住）
+# 表现为「脚本无输出、退出码 1」，最难查的那种。
+# bas.sh 是按「没有 set -u」写的，所以让它先在没有 -u 的环境里加载完。
 source /opt/grigs/bas.sh 2>/dev/null || {
     # ---- 没装分发平台时的兜底 ----
     #
@@ -78,6 +86,9 @@ source /opt/grigs/bas.sh 2>/dev/null || {
                       printf '%s\n' "$(__tp_fmt "$@")"; }
     check_root()    { [[ $EUID -eq 0 ]] || { printf '[ERROR] 此操作需要管理员权限\n' >&2; exit 1; }; }
 }
+
+# 平台函数加载完毕，现在才收紧 shell 选项 —— 见上面「必须先 source 后 set -u」。
+set -uo pipefail
 
 # ---------- 配置 ----------
 TPROXY_SERVER="192.168.0.18"
