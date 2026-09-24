@@ -130,10 +130,23 @@ repair_dnf_repos() {
     [[ -n "$f" ]] || continue
     mkdir -p "$bk" 2>/dev/null || true
     cp -a "$f" "$bk/$(basename "$f").$(date +%s)" 2>/dev/null || true
-    # 只删 metalink 行，其余原样
     local tmp
     tmp=$(mktemp) || continue
-    grep -vE '^[[:space:]]*metalink[[:space:]]*=' "$f" > "$tmp" && cat "$tmp" > "$f"
+    # **只删「本段有 baseurl」的 metalink 行**。
+    # 删 metalink 的前提是 baseurl 能兜底 —— 某段若只有 metalink 没有 baseurl，
+    # 删了等于把该仓库彻底去掉。两遍扫描以兼容 baseurl 写在 metalink 之后的情况。
+    awk '
+      NR == FNR {
+        if ($0 ~ /^\[/) { sec = $0; gsub(/[][]/, "", sec) }
+        if ($0 ~ /^[ \t]*baseurl[ \t]*=/) has_base[sec] = 1
+        next
+      }
+      /^\[/ { sec = $0; gsub(/[][]/, "", sec) }
+      /^[ \t]*metalink[ \t]*=/ {
+        if (has_base[sec]) next          # 有 baseurl 兜底 → 删掉 metalink
+      }
+      { print }
+    ' "$f" "$f" > "$tmp" && cat "$tmp" > "$f"
     rm -f "$tmp"
     did=1
   done < <(dnf_metalink_sources "$d")

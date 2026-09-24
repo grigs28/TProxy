@@ -37,6 +37,10 @@
     （官方域名，已被劫持）
   - **debuginfo / source / update-source 开着**：普通机器用不到，
     元数据却不小，openEuler 官方默认也是关的
+- **保护：只有 metalink 没有 baseurl 的段不删 metalink**（`tp.client.sh` → 0.1.5）。
+  删 metalink 的前提是 baseurl 能兜底 —— 某段若只有 metalink，删了等于把
+  该仓库彻底去掉。改为**按段判断**（两遍扫描，兼容 baseurl 写在 metalink 之后）
+
   实测机群：`.19` 791 次 metalink 请求（地址写错，一天到晚 404）、
   `.112/.113/.114` 各 29 次、`.08` 18 次、`.116` 15 次
 

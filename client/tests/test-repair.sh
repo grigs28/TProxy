@@ -57,6 +57,36 @@ else
   fail=1
 fi
 
+echo "== 保护：只有 metalink 没有 baseurl 的段不许删（删了就没兜底）=="
+mkdir -p "$T/d2"
+cat > "$T/d2/onlymeta.repo" <<'EOF'
+[only-meta]
+name=only metalink, no baseurl
+metalink=https://mirrors.openeuler.org/metalink?repo=x&arch=x86_64
+enabled=1
+EOF
+cat > "$T/d2/normal.repo" <<'EOF'
+[OS]
+name=OS
+baseurl=https://repo.openeuler.org/openEuler-24.03-LTS-SP4/OS/x86_64/
+metalink=https://mirrors.openeuler.org/metalink?repo=$releasever/OS&arch=$basearch
+enabled=1
+EOF
+BACKUP_DIR="$T/bk" repair_dnf_repos "$T/d2" >/dev/null
+if [[ "$(grep -c '^metalink=' "$T/d2/onlymeta.repo")" -eq 1 ]]; then
+  echo "  ✅ 无 baseurl 的段保留了 metalink"
+else
+  echo "  ❌ 删了没有兜底的 metalink —— 该仓库会彻底失效"
+  fail=1
+fi
+if [[ "$(grep -c '^metalink=' "$T/d2/normal.repo")" -eq 0 ]] \
+   && [[ "$(grep -c '^baseurl=' "$T/d2/normal.repo")" -eq 1 ]]; then
+  echo "  ✅ 有 baseurl 的段正常删除，baseurl 完好"
+else
+  echo "  ❌ 正常段处理不对"
+  fail=1
+fi
+
 echo "== dnf（openEuler）侧：metalink 与冗余源 =="
 mkdir -p "$T/yum.repos.d"
 cat > "$T/yum.repos.d/openEuler.repo" <<'EOF'
