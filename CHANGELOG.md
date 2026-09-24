@@ -30,6 +30,16 @@
   Debian 基础源仍正常，所以安全更新照常，问题极难察觉。
   检测后移进 backup（可逆，拿到订阅挪回来即可）
 
+- **openEuler / dnf 侧的检查与修复**（`tp.client.sh` → 0.1.4）。
+  此前只覆盖了 Debian 的 apt，rpm 系是空的：
+  - **metalink**：它返回的是**镜像地址列表**、由 dnf 自己挑 ——
+    挑到不在劫持列表里的镜像就绕过缓存了。去掉后走 `baseurl`
+    （官方域名，已被劫持）
+  - **debuginfo / source / update-source 开着**：普通机器用不到，
+    元数据却不小，openEuler 官方默认也是关的
+  实测机群：`.19` 791 次 metalink 请求（地址写错，一天到晚 404）、
+  `.112/.113/.114` 各 29 次、`.08` 18 次、`.116` 15 次
+
 - 新增 git 全局 `url.*.insteadOf` 重定向的检查与移除 ——
   把 `github.com` 重定向到别处，会让 git 流量绕过 TProxy 缓存
 - 发行版判断（`is_debian_like`），apt 相关的检查只对 Debian 系执行

@@ -79,6 +79,85 @@ codename_mismatch() {
   return 1
 }
 
+# ---- openEuler / dnf（rpm 系）----
+
+# 是否 rpm 系（dnf/yum）。Debian 系不走这套。
+is_rpm_like() {
+  [[ -r /etc/os-release ]] && grep -qiE '^(ID|ID_LIKE)=.*(rhel|fedora|centos|openeuler|anolis|kylin)' /etc/os-release
+}
+
+# 判断：哪些 .repo 文件里还有 metalink=。
+#
+# 为什么它有害（不只是「多一次请求」）：metalink 返回的是**镜像地址列表**，
+# dnf 会自己挑一个去下载 —— 挑到不在 TProxy 劫持列表里的镜像，
+# 流量就**直接绕过缓存**了，与这套架构的目的相反。
+# baseurl 指向官方域名，已被劫持，稳定走缓存。
+#
+# 实测：某台机器因为 metalink 地址写错（repo=/OS 少写了发行版名），
+# 上游一律回 404，被 dnf-makecache.timer 每小时刷 168 次，
+# 把缓存命中率从 70% 压到 31% —— 看起来像缓存坏了，实际毫无问题。
+dnf_metalink_sources() {
+  local d="${1:-/etc/yum.repos.d}"
+  grep -rlE '^[[:space:]]*metalink[[:space:]]*=' "$d" --include='*.repo' 2>/dev/null
+}
+
+# 判断：哪些 .repo 文件里开着 debuginfo / source / update-source。
+# 这些源普通机器用不到，元数据却不小 —— openEuler 官方默认也是关的。
+dnf_redundant_repos() {
+  local d="${1:-/etc/yum.repos.d}" f
+  for f in "$d"/*.repo; do
+    [[ -f "$f" ]] || continue
+    # 必须**按段判断** enabled：整个文件里找 enabled=1 会误报 ——
+    # [OS] 段也有 enabled=1，于是修完 debuginfo 仍然报「仍启用」。
+    awk '
+      /^\[/ { sec = $0; gsub(/[][]/, "", sec) }
+      /^[[:space:]]*enabled[[:space:]]*=[[:space:]]*1/ {
+        if (sec == "debuginfo" || sec == "source" || sec == "update-source") {
+          print FILENAME; exit
+        }
+      }
+    ' "$f"
+  done
+}
+
+# 修复 dnf 源：去掉 metalink、关掉冗余源。**先判断再动手**。
+repair_dnf_repos() {
+  local d="${1:-/etc/yum.repos.d}"
+  local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/yum.repos.d"
+  local did=0 f
+
+  while read -r f; do
+    [[ -n "$f" ]] || continue
+    mkdir -p "$bk" 2>/dev/null || true
+    cp -a "$f" "$bk/$(basename "$f").$(date +%s)" 2>/dev/null || true
+    # 只删 metalink 行，其余原样
+    local tmp
+    tmp=$(mktemp) || continue
+    grep -vE '^[[:space:]]*metalink[[:space:]]*=' "$f" > "$tmp" && cat "$tmp" > "$f"
+    rm -f "$tmp"
+    did=1
+  done < <(dnf_metalink_sources "$d")
+
+  while read -r f; do
+    [[ -n "$f" ]] || continue
+    mkdir -p "$bk" 2>/dev/null || true
+    cp -a "$f" "$bk/$(basename "$f").$(date +%s)" 2>/dev/null || true
+    # 把 debuginfo / source / update-source 三段的 enabled 改成 0
+    local tmp
+    tmp=$(mktemp) || continue
+    awk '
+      /^\[(debuginfo|source|update-source)\]/ { insec = 1; print; next }
+      /^\[/ { insec = 0 }
+      insec && /^[[:space:]]*enabled[[:space:]]*=/ { print "enabled=0"; next }
+      { print }
+    ' "$f" > "$tmp" && cat "$tmp" > "$f"
+    rm -f "$tmp"
+    did=1
+  done < <(dnf_redundant_repos "$d")
+
+  [[ $did -eq 1 ]]
+}
+
 # 判断：启用中的企业版源（需付费订阅）。
 #
 # PVE 9 全新安装**默认启用** enterprise.proxmox.com。没有订阅密钥时

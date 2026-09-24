@@ -57,6 +57,52 @@ else
   fail=1
 fi
 
+echo "== dnf（openEuler）侧：metalink 与冗余源 =="
+mkdir -p "$T/yum.repos.d"
+cat > "$T/yum.repos.d/openEuler.repo" <<'EOF'
+[OS]
+name=OS
+baseurl=https://repo.openeuler.org/openEuler-24.03-LTS-SP3/OS/x86_64/
+metalink=https://mirrors.openeuler.org/metalink?repo=$releasever/OS&arch=$basearch
+enabled=1
+
+[debuginfo]
+name=debuginfo
+baseurl=https://repo.openeuler.org/openEuler-24.03-LTS-SP3/debuginfo/x86_64/
+enabled=1
+EOF
+if [[ -n "$(dnf_metalink_sources "$T/yum.repos.d")" ]]; then
+  echo "  ✅ 检出含 metalink 的 repo"
+else
+  echo "  ❌ 没检出 metalink"
+  fail=1
+fi
+if [[ -n "$(dnf_redundant_repos "$T/yum.repos.d")" ]]; then
+  echo "  ✅ 检出启用中的 debuginfo"
+else
+  echo "  ❌ 没检出冗余源"
+  fail=1
+fi
+BACKUP_DIR="$T/bk" repair_dnf_repos "$T/yum.repos.d" >/dev/null
+if [[ -z "$(dnf_metalink_sources "$T/yum.repos.d")" ]]; then
+  echo "  ✅ metalink 已清除"
+else
+  echo "  ❌ metalink 还在"
+  fail=1
+fi
+if grep -q "openEuler-24.03-LTS-SP3/OS/x86_64/" "$T/yum.repos.d/openEuler.repo"; then
+  echo "  ✅ baseurl 未被破坏"
+else
+  echo "  ❌ baseurl 被改坏了"
+  fail=1
+fi
+if [[ -z "$(dnf_redundant_repos "$T/yum.repos.d")" ]]; then
+  echo "  ✅ 冗余源已关闭"
+else
+  echo "  ❌ 冗余源仍启用"
+  fail=1
+fi
+
 echo "== 检出启用中的企业版源（非订阅会 401）=="
 mkdir -p "$T/d"
 cat > "$T/d/pve-enterprise.sources" <<'EOF'
@@ -129,7 +175,8 @@ printf '[user]\n\tname = x\n' > "$T/gitclean"
 echo "== 两份实现不许分叉 =="
 for fn in dead_proxy_sources pve_sources_content ceph_sources_content \
           codename_mismatch git_redirects enterprise_sources \
-          disable_enterprise_sources; do
+          disable_enterprise_sources dnf_metalink_sources \
+          dnf_redundant_repos repair_dnf_repos is_rpm_like; do
   if grep -q "^${fn}()" "$DIR/lib/repair.sh" && grep -q "^${fn}()" "$DIR/dist/tp.client.sh"; then
     echo "  ✅ 两份都有 $fn"
   else
