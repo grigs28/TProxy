@@ -12,6 +12,36 @@
 
 ---
 
+## [0.4.9] - 2026-09-24
+
+### 修复：非 github 域名不该进缓存层（0.4.8 引入）
+
+0.4.8 把缓存分支统一指向了 smart-git，但**它的上游地址是写死的 `https://github.com`**。
+于是 gitlab / gitee 的请求被送进缓存层 → 它去 github 找同名仓库、失败、再回落 ——
+白白多一次回源。
+
+**更要紧的是那个回落对 POST 无效**：本 server 段开了 `proxy_request_buffering off`
+（push 要流式转发），而 `error_page` 触发内部重定向时**要重放请求体** ——
+体已经流走了，重放的是空体，上游直接关连接 → **502**。
+实测：gitlab 的 `info/refs`(GET) 能回落成功，`git-upload-pack`(POST) 必 502。
+
+改为新增 `map $host $git_cacheable`，**只有 github.com 走缓存**，其余从一开头就直连。
+
+### 本地链路充分测试（`.19`，12/12 通过）
+
+| # | 场景 | 结果 |
+|---|---|---|
+| ① | 公有仓库 ls-remote（缓存服务，TTL 内滞后属正常） | ✅ |
+| ② | 完整 clone | ✅ |
+| ③ | 增量 fetch | ✅ |
+| ④ | 私有仓库·匿名 → **明确报错**（不再静默） | ✅ |
+| ⑤ | 私有仓库·带凭据 → 6 行 ref | ✅ |
+| ⑥ | push → 直连（认证挑战，未被缓存层拦） | ✅ |
+| ⑦ | 多层路径 `/a/b/c.git` | ✅ |
+| ⑧ | **gitlab.com / gitee.com 完整 clone（含 POST）** | ✅ |
+| ⑨ | 非 git 端点（网页 / raw）直连 | ✅ |
+| ⑩ | 缓存层只收 github（仅 TProxy / log-ui） | ✅ |
+
 ## [0.4.8] - 2026-09-24
 
 ### 更换 Git 缓存层：gitcache → smart-git（并加 5xx 回落）
