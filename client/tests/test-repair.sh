@@ -34,6 +34,38 @@ else
   fail=1
 fi
 
+echo "== 与 .sources 重复的行也要清掉（apt 会告警且元数据拉两遍）=="
+mkdir -p "$T/dup"
+cat > "$T/dup/debian.sources" <<'EOF'
+Types: deb
+URIs: http://deb.debian.org/debian/
+Suites: trixie trixie-updates
+
+Types: deb
+URIs: http://security.debian.org/debian-security/
+Suites: trixie-security
+EOF
+cat > "$T/dup/sources.list" <<'EOF'
+deb http://192.168.0.18/repository/debian-proxy/ trixie main
+deb http://mirrors.ustc.edu.cn/debian-security trixie-security main
+deb http://mirrors.ustc.edu.cn/debian trixie-backports main
+EOF
+n=$(duplicate_suite_lines "$T/dup/sources.list" "$T/dup" | wc -l)
+if [[ "$n" -eq 2 ]]; then
+  echo "  ✅ 检出 2 行重复（trixie 与 trixie-security）"
+else
+  echo "  ❌ 期望 2，实际 $n"
+  fail=1
+fi
+BACKUP_DIR="$T/bk" repair_apt_sources "$T/dup/sources.list" "$T/dup" trixie >/dev/null
+if grep -q "trixie-backports" "$T/dup/sources.list" \
+   && ! grep -qE "repository/debian-proxy|debian-security" "$T/dup/sources.list"; then
+  echo "  ✅ 重复行已清，backports（唯一没被覆盖的）保留"
+else
+  echo "  ❌ 结果不对:"; sed 's/^/       /' "$T/dup/sources.list"
+  fail=1
+fi
+
 echo "== PVE 9 的源该长什么样（官方 deb822 + trixie）=="
 pve_sources_content trixie > "$T/proxmox.sources"
 if grep -q "^Types: deb$" "$T/proxmox.sources" \
@@ -205,6 +237,7 @@ printf '[user]\n\tname = x\n' > "$T/gitclean"
 echo "== 两份实现不许分叉 =="
 for fn in dead_proxy_sources pve_sources_content ceph_sources_content \
           codename_mismatch git_redirects enterprise_sources \
+          duplicate_suite_lines \
           disable_enterprise_sources dnf_metalink_sources \
           dnf_redundant_repos repair_dnf_repos is_rpm_like; do
   if grep -q "^${fn}()" "$DIR/lib/repair.sh" && grep -q "^${fn}()" "$DIR/dist/tp.client.sh"; then

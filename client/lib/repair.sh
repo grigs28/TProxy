@@ -210,10 +210,48 @@ detect_codename() {
   command -v lsb_release >/dev/null 2>&1 && lsb_release -sc 2>/dev/null
 }
 
-# 已下线的代理路径 → 换成仍在服务、且会被 TProxy 劫持的官方地址。
-# 只改主机与路径，suite 与组件原样保留。
-_rewrite_dead_proxy_line() {
-  sed -E 's#https?://[0-9.]+/repository/debian-proxy/?#http://deb.debian.org/debian/#g'
+# 判断：sources.list 里哪些行的 suite 已由 .sources 文件提供 —— 即重复配置。
+#
+# 为什么它是要修的：apt 会对每条重复的源发 W: 告警，并且**同一份元数据被拉两遍**
+# （走代理，但白费一轮）。PVE 9 的官方布局是 debian.sources 负责 Debian 基础源、
+# sources.list 清空 —— ve.client.sh 恰恰相反，往 sources.list 塞了一份完整的。
+#
+# 只列**非注释**且 suite 确实被 .sources 覆盖的行；backports 这类没被覆盖的会保留。
+duplicate_suite_lines() {
+  local f="${1:-$APT_SOURCES_LIST}" d="${2:-$APT_SOURCES_D}" line suite
+  [[ -f "$f" ]] || return 0
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" =~ ^[[:space:]]*deb ]] || continue
+    suite=$(awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^https?:\/\//) { print $(i+1); exit } }' <<< "$line")
+    _suite_provided_by_sources "$suite" "$d" && printf '%s\n' "$line"
+  done < "$f"
+}
+
+# 某个发行版 suite 是否已由 .sources（deb822）文件提供。
+# 用于判断一条死源行是「改成别的地址」还是「直接删掉」。
+_suite_provided_by_sources() {
+  local suite="$1" d="${2:-$APT_SOURCES_D}" f
+  [[ -n "$suite" ]] || return 1
+  for f in "$d"/*.sources; do
+    [[ -f "$f" ]] || continue
+    grep -qE "^[[:space:]]*Suites:.*(^|[[:space:]])${suite}([[:space:]]|$)" "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+# 修复一行死源：
+#   · 它声明的 suite 已被 .sources 提供 → **删除该行**（本来就重复，改地址只会
+#     造成「同一源配置多次」，apt 会告警且元数据被拉两遍）
+#   · 否则 → 把已下线的代理地址换成 deb.debian.org（仍在服务、且会被劫持）
+_repair_dead_proxy_line() {
+  local line="$1" d="$2" suite
+  # 单行格式：deb [选项] URI suite 组件…  —— suite 是第 3 个字段
+  suite=$(awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^https?:\/\//) { print $(i+1); exit } }' <<< "$line")
+  if _suite_provided_by_sources "$suite" "$d"; then
+    return 0                      # 不输出 → 该行被删掉
+  fi
+  sed -E 's#https?://[0-9.]+/repository/debian-proxy/?#http://deb.debian.org/debian/#g' <<< "$line"
 }
 
 # 修复 apt 源。返回 0=无需或已修好，1=失败
@@ -227,14 +265,27 @@ repair_apt_sources() {
   local codename="${3:-$(detect_codename)}"
   local did=0
 
-  # ① 死源
-  if [[ -f "$list" ]] && [[ -n "$(dead_proxy_sources "$list")" ]]; then
+  # ① 死源 与 重复配置
+  # 判据是「有死源**或**有与 .sources 重复的行」——
+  # 只按死源判断的话，修完死源之后若还剩重复行（比如别人本来就配了
+  # 一份与 debian.sources 重叠的），就再也不会被清理了。
+  if [[ -f "$list" ]] && { [[ -n "$(dead_proxy_sources "$list")" ]] \
+        || [[ -n "$(duplicate_suite_lines "$list" "$d")" ]]; }; then
     local bk="${BACKUP_DIR:-/var/backups/tproxy-client}/apt"
     mkdir -p "$bk" 2>/dev/null || true
     cp -a "$list" "$bk/sources.list.$(date +%s)" 2>/dev/null || true
-    local tmp
+    local tmp line suite
     tmp=$(mktemp) || return 1
-    _rewrite_dead_proxy_line < "$list" > "$tmp" || { rm -f "$tmp"; return 1; }
+    : > "$tmp"
+    while IFS= read -r line; do
+      suite=$(awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^https?:\/\//) { print $(i+1); exit } }' <<< "$line")
+      if [[ "$line" =~ $_DEAD_PROXY_RE ]] || _suite_provided_by_sources "$suite" "$d"; then
+        # 死源、或与 .sources 重复 → 交给 _repair_dead_proxy_line 决定是删还是改
+        _repair_dead_proxy_line "$line" "$d" >> "$tmp" || { rm -f "$tmp"; return 1; }
+      else
+        printf '%s\n' "$line" >> "$tmp"
+      fi
+    done < "$list"
     cat "$tmp" > "$list" || { rm -f "$tmp"; return 1; }
     rm -f "$tmp"
     did=1
