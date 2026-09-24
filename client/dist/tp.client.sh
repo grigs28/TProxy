@@ -47,16 +47,36 @@
 #        不依赖 wget.sh —— 直接用系统 wget 取文件
 #  版本号：每次修改递增，10 进位
 # ============================================================
-VERSION="0.1.8"
+VERSION="0.1.9"
 set -uo pipefail
 
 source /opt/grigs/bas.sh 2>/dev/null || {
-    print_step()    { echo -e "\n>>> $1"; }
-    print_info()    { echo "  [INFO] $1"; }
-    print_success() { echo "  [OK] $1"; }
-    print_warning() { echo "  [WARN] $1"; }
-    print_error()   { echo "  [ERROR] $1" >&2; }
-    check_root()    { [[ $EUID -eq 0 ]] || { echo "[ERROR] 此操作需要管理员权限" >&2; exit 1; }; }
+    # ---- 没装分发平台时的兜底 ----
+    #
+    # ⚠️ 必须**对齐 bas.sh 的接口**，否则无平台的机器上输出会坏。
+    # bas.sh 的形状是：print_* 内部走 `translate "$@"`，而 translate 就是
+    # 「有剩余参数就 printf、否则原样输出」；print_color 收 <中文色名> <文本>。
+    #
+    # 实测踩过两个坑（.9 CentOS7 / .17 istoreos / .78 Debian12 三台没装平台）：
+    #   ① 原来漏了 print_color —— 脚本打标题那行直接「print_color: 未找到命令」
+    #   ② 原来写的是 `echo "  [INFO] $1"` —— 只吃第一个参数，
+    #      而调用形如 `print_info "… %s …" "$值"`，于是输出里全是**字面 `%s`**，
+    #      数字全丢。最要命的是「metalink（%s 个文件）」看不出有几个。
+    #
+    # 兜底不输出 ANSI 颜色：本机没平台，多半也没人配终端，朴素文本更稳。
+    __tp_fmt() {
+        local fmt="${1:-}"; [[ $# -gt 0 ]] && shift
+        [[ -z "$fmt" ]] && return 0
+        if [[ $# -gt 0 ]]; then printf -- "$fmt" "$@"; else printf '%s' "$fmt"; fi
+    }
+    print_step()    { printf '\n>>> %s\n'   "$(__tp_fmt "$@")"; }
+    print_info()    { printf '  [INFO] %s\n'  "$(__tp_fmt "$@")"; }
+    print_success() { printf '  [OK] %s\n'    "$(__tp_fmt "$@")"; }
+    print_warning() { printf '  [WARN] %s\n'  "$(__tp_fmt "$@")"; }
+    print_error()   { printf '  [ERROR] %s\n' "$(__tp_fmt "$@")" >&2; }
+    print_color()   { local _c="${1:-}"; [[ $# -gt 0 ]] && shift
+                      printf '%s\n' "$(__tp_fmt "$@")"; }
+    check_root()    { [[ $EUID -eq 0 ]] || { printf '[ERROR] 此操作需要管理员权限\n' >&2; exit 1; }; }
 }
 
 # ---------- 配置 ----------
@@ -78,14 +98,37 @@ DOCKER_CERT_DOMAINS=(
 )
 
 # TProxy 会劫持的域名。用于自检核对，以及检查 /etc/hosts 有没有把它们钉在公网 IP 上。
-# ⚠️ 要与服务端 dnsmasq.conf 的 address= 规则保持一致。
+#
+# ⚠️ **这份清单以服务端为准，不是抄一份放着**。
+#   权威来源：`proxy/dnsmasq/dnsmasq.conf` 的 `address=` 规则。
+#   守卫测试：`tests/test-hosts.sh` 直接解析那份 dnsmasq.conf 并比对，
+#   服务端加了域名而这里没跟 → 测试立刻红。
+#
+# 为什么守卫要指向服务端、而不是只比对 lib 与 dist 两份：
+#   实测漂移过一次 —— 两份实现**一起**只写了 10 个，而服务端劫持 37 个。
+#   少掉的 27 个里有 quay.io / ghcr.io / mirrors.aliyun.com / nodejs.org /
+#   archive.ubuntu.com …，「检查 hosts 有没有钉死劫持域名」于是静默漏掉
+#   三分之二；而两份互相比对永远是绿的。
 HIJACK_DOMAINS=(
-    repo.openeuler.org mirrors.openeuler.org
-    registry-1.docker.io auth.docker.io nvcr.io
-    pypi.org files.pythonhosted.org
-    registry.npmjs.org
-    repo1.maven.org
-    github.com
+    # openEuler
+    repo.openeuler.org mirrors.openeuler.org dl-cdn.openeuler.openatom.cn
+    # Ubuntu
+    archive.ubuntu.com security.ubuntu.com cn.archive.ubuntu.com ports.ubuntu.com
+    # CentOS / EPEL
+    mirror.centos.org mirrorlist.centos.org dl.fedoraproject.org mirrors.fedoraproject.org
+    # 国内镜像站
+    mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn mirrors.ustc.edu.cn mirrors.huaweicloud.com
+    # Docker 镜像仓库
+    registry-1.docker.io auth.docker.io production.cloudflare.docker.com
+    quay.io gcr.io ghcr.io k8s.gcr.io registry.k8s.io mcr.microsoft.com nvcr.io
+    # Git 仓库
+    github.com gitlab.com gitee.com
+    # Python 包索引
+    pypi.org files.pythonhosted.org pypi.tuna.tsinghua.edu.cn
+    # Node.js 包索引
+    registry.npmjs.org registry.npmmirror.com nodejs.org
+    # Java 制品仓库
+    repo1.maven.org repo.maven.apache.org maven.aliyun.com
 )
 
 BACKUP_HOSTS="${BACKUP_DIR}/hosts.original"
@@ -529,8 +572,29 @@ is_rpm_like() {
 # 上游一律回 404，被 dnf-makecache.timer 每小时刷 168 次，
 # 把缓存命中率从 70% 压到 31% —— 看起来像缓存坏了，实际毫无问题。
 dnf_metalink_sources() {
-  local d="${1:-/etc/yum.repos.d}"
-  grep -rlE '^[[:space:]]*metalink[[:space:]]*=' "$d" --include='*.repo' 2>/dev/null
+  local d="${1:-/etc/yum.repos.d}" f
+  # ⚠️ 两个约束，都是真机踩出来的（.9 / CentOS 7）：
+  #
+  # ① **只在顶层找，不递归**。原来是 `grep -r ... "$d"`，于是
+  #    /etc/yum.repos.d/backup/ 里的**备份**也被算进来。备份 dnf 根本不读，
+  #    报它是误报；更糟的是 repair_dnf_repos 会照单去"修" ——
+  #    实测把备份里未注释 baseurl 段的 `metalink=` 行**删掉了**，
+  #    备份就此还原不回去，失去存在意义。
+  # ② **只看启用中的段**。整段 enabled=0 的 repo（如 epel-testing.repo）
+  #    dnf 压根不会读，报它只是噪音。enabled 缺省视为启用（dnf 的默认）。
+  for f in "$d"/*.repo; do
+    [[ -f "$f" ]] || continue
+    awk '
+      /^\[/ { sec = $0; gsub(/[][]/, "", sec); next }
+      /^[[:space:]]*enabled[[:space:]]*=/ {
+        v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); gsub(/[[:space:]]/, "", v)
+        off[sec] = (v == "0" || v == "false" || v == "no")
+        next
+      }
+      /^[[:space:]]*metalink[[:space:]]*=/ { has[sec] = 1 }
+      END { for (s in has) if (!off[s]) { print FILENAME; exit } }
+    ' "$f"
+  done
 }
 
 # 判断：哪些 .repo 文件里开着 debuginfo / source / update-source。
@@ -1459,19 +1523,110 @@ install_cert() {
     install_runtime_ca "$CA_LOCAL"
 }
 
+# ---------- DNS 查询 ----------
+#
+# 自检原本只认 `dig`，没有它就**整段跳过**。但实测有机器装不上 dig：
+#   · `.17` istoreos —— 根本没有包管理器
+#   · `.9`  CentOS 7 —— 已 EOL，仓库多半也装不上
+# 它们其实有替代品，自检不该就此放弃。
+#
+# ⚠️ 但替代品的**语义不同**，不能混为一谈：
+#     dig / nslookup / resolvectl  直接问 nameserver，**绕开 /etc/hosts**
+#     getent hosts                 走 NSS，**会读 /etc/hosts**
+# 前者用来验「DNS 劫持生效吗」，后者用来验「真实程序走哪条路」。
+# 所以 getent 排最后，且调用方要把它与 dig 的结果区分看待。
+
+# 挑一个可用的查询工具（优先绕开 NSS 的）。
+dns_query_tool() {
+    local c
+    for c in dig nslookup resolvectl getent; do
+        command -v "$c" >/dev/null 2>&1 && { printf '%s\n' "$c"; return 0; }
+    done
+    return 1
+}
+
+# 从各工具的输出里挑出**答案**中的第一个 IPv4。
+# 每个工具形状不同，必须分开处理 —— 三个坑都是真机输出才暴露的：
+#
+# ① nslookup 的**前几行是它自己的服务器地址**（Server:/Address: 127.0.0.1:53）。
+#    通用「找第一个 IP」会把 127.0.0.1 当成答案。
+# ② resolvectl 的行尾还有 `-- link: eth0`。开始用贪婪的 `.*: ` 去套，
+#    它匹配到的是 `link:` 那个冒号而不是域名后面那个 —— 永远取不到地址。
+# ③ `getent hosts` **只回 IPv6**（实测 .78 上 pypi.org 回 4 条 AAAA、0 条 A），
+#    得改用 `getent ahostsv4` 才会问 A 记录。
+_nslookup_ipv4() {
+    awk '
+      /^Name:/ { seen = 1; next }
+      seen && /^Address/ { print $NF; exit }
+      /^Address/ { last = $NF }
+      END { if (!seen && last != "") print last }' \
+    | command grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1
+}
+
+_resolvectl_ipv4() {
+    # 按空白切词后找第一个纯 IPv4 —— 与冒号位置无关，稳
+    awk '{ for (i = 1; i <= NF; i++)
+             if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print $i; exit } }'
+}
+
+_getent_ipv4() {
+    awk '{ print $1 }' | command grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1
+}
+
+# 查一个域名的第一个 IPv4。查不到返回空、退出码 1。
+resolve_first_ip() {
+    local d="$1" tool
+    tool=$(dns_query_tool) || return 1
+    local out=""
+    case "$tool" in
+      dig)
+        out=$(dig +time=3 +tries=1 +short "$d" 2>/dev/null \
+              | command grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1) ;;
+      nslookup)   out=$(nslookup "$d" 2>/dev/null | _nslookup_ipv4) ;;
+      resolvectl) out=$(resolvectl query "$d" 2>/dev/null | _resolvectl_ipv4) ;;
+      getent)     out=$(getent ahostsv4 "$d" 2>/dev/null | _getent_ipv4) ;;
+    esac
+    [[ -n "$out" ]] || return 1
+    printf '%s\n' "$out"
+}
+
+# 向**指定** DNS 服务器查一个域名 —— 用于验证「代理宕机时公网兜底能否上网」。
+# 只有 dig / nslookup 能指定服务器；getent 走 NSS，做不到。
+# 返回：0=查到  1=无响应  2=工具不支持（调用方应**跳过**而不是判失败）
+resolve_via() {
+    local srv="$1" d="$2" out=""
+    if command -v dig >/dev/null 2>&1; then
+        out=$(dig +time=2 +tries=1 +short "@${srv}" "$d" 2>/dev/null)
+    elif command -v nslookup >/dev/null 2>&1; then
+        out=$(nslookup "$d" "$srv" 2>/dev/null | _nslookup_ipv4)
+    else
+        return 2
+    fi
+    [[ -n "$out" ]]
+}
+
 # ---------- 自检 ----------
 do_verify() {
     print_step "自检"
     local fail=0 d ip
 
-    if ! command -v dig >/dev/null 2>&1; then
-        print_warning "未安装 dig，跳过 DNS 解析检查（可 ins_dnf bind-utils 后重跑 --status）"
+    local tool
+    if ! tool=$(dns_query_tool); then
+        print_warning "没有任何 DNS 查询工具（dig/nslookup/resolvectl/getent），跳过解析检查"
         return 0
     fi
+    if [[ "$tool" != "dig" ]]; then
+        print_info "未安装 dig，改用 %s 查询" "$tool"
+    fi
+    # 走 NSS 的工具（getent）会读 /etc/hosts —— 语义与 dig 不同，
+    # 说清楚，免得把「hosts 覆盖」当成「DNS 劫持没生效」
+    case "$tool" in
+      getent) print_warning "  %s 会读 /etc/hosts，结果含 NSS 覆盖，语义与 dig 不同" "$tool" ;;
+    esac
 
     print_info "DNS 解析（应指向 %s）" "$TPROXY_SERVER"
     for d in "${HIJACK_DOMAINS[@]}"; do
-        ip=$(dig +time=3 +tries=1 +short "$d" 2>/dev/null | grep -E '^[0-9]' | head -1)
+        ip=$(resolve_first_ip "$d")
         if [[ "$ip" == "$TPROXY_SERVER" ]]; then
             print_success "  %s -> %s" "$d" "$ip"
         else
@@ -1498,12 +1653,15 @@ do_verify() {
     print_info "公网兜底（直查备用 DNS）"
     local ok=0 b
     for b in "${DNS_FALLBACK[@]}"; do
-        if dig +time=2 +tries=1 +short "@${b}" www.baidu.com 2>/dev/null | grep -qE '^[0-9]'; then
-            print_success "  %s 可用" "$b"
-            ok=1
-            break
-        fi
-        print_warning "  %s 无响应" "$b"
+        resolve_via "$b" www.baidu.com
+        case $? in
+          0) print_success "  %s 可用" "$b"; ok=1; break ;;
+          # ⚠️ 工具不支持指定服务器时要**跳过**，不能当成「DNS 不可达」——
+          # 那会凭空报出「代理宕机将断网」，比不检查更糟
+          2) print_warning "  无 dig/nslookup，无法直查备用 DNS，跳过此项"
+             ok=-1; break ;;
+          *) print_warning "  %s 无响应" "$b" ;;
+        esac
     done
     [[ $ok -eq 0 ]] && { print_error "所有备用 DNS 均不可达 —— 代理宕机时将断网"; fail=1; }
 

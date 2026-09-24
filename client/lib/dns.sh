@@ -18,14 +18,39 @@ BACKUP_HOSTS="$BACKUP_DIR/hosts.original"
 # TProxy 会劫持的域名。客户端侧需要这份清单做两件事：
 #   1. 自检时核对这些域名确实指向代理
 #   2. 检查 /etc/hosts 有没有把它们钉在公网 IP 上 —— 那会让劫持完全失效
-# ⚠️ 要与服务端 dnsmasq.conf 的 address= 规则保持一致。
+#
+# ⚠️ **这份清单以服务端为准，不是抄一份放着**。
+#   权威来源：`proxy/dnsmasq/dnsmasq.conf` 的 `address=` 规则。
+#   守卫测试：`tests/test-hosts.sh` 会直接解析那份 dnsmasq.conf 并比对，
+#   服务端加了域名而这里没跟 → 测试立刻红。
+#
+# 为什么这条守卫要指向服务端、而不是只比对 lib 与 dist 两份实现：
+#   实测漂移过一次 —— 两份实现**一起**只写了 10 个，而服务端劫持 37 个。
+#   少掉的 27 个里有 quay.io / ghcr.io / mirrors.aliyun.com / nodejs.org /
+#   archive.ubuntu.com …，「检查 hosts 有没有钉死劫持域名」这条于是静默
+#   漏掉三分之二；两份互相比对则永远是绿的。
+#
+# 顺序与 dnsmasq.conf 的分组保持一致，方便人工对照。
 HIJACK_DOMAINS=(
-  repo.openeuler.org mirrors.openeuler.org
-  registry-1.docker.io auth.docker.io nvcr.io
-  pypi.org files.pythonhosted.org
-  registry.npmjs.org
-  repo1.maven.org
-  github.com
+  # openEuler
+  repo.openeuler.org mirrors.openeuler.org dl-cdn.openeuler.openatom.cn
+  # Ubuntu
+  archive.ubuntu.com security.ubuntu.com cn.archive.ubuntu.com ports.ubuntu.com
+  # CentOS / EPEL
+  mirror.centos.org mirrorlist.centos.org dl.fedoraproject.org mirrors.fedoraproject.org
+  # 国内镜像站
+  mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn mirrors.ustc.edu.cn mirrors.huaweicloud.com
+  # Docker 镜像仓库
+  registry-1.docker.io auth.docker.io production.cloudflare.docker.com
+  quay.io gcr.io ghcr.io k8s.gcr.io registry.k8s.io mcr.microsoft.com nvcr.io
+  # Git 仓库
+  github.com gitlab.com gitee.com
+  # Python 包索引
+  pypi.org files.pythonhosted.org pypi.tuna.tsinghua.edu.cn
+  # Node.js 包索引
+  registry.npmjs.org registry.npmmirror.com nodejs.org
+  # Java 制品仓库
+  repo1.maven.org repo.maven.apache.org maven.aliyun.com
 )
 
 # ---- 直连模式（应急）----

@@ -118,20 +118,48 @@ else
     fail=1
 fi
 
-echo "== 两份实现不许分叉 =="
+echo "== 劫持域名清单必须【随服务端】，不能两份互抄 =="
 # client/lib/*.sh 与 dist/tp.client.sh 是同一工具的两份实现，各自手工维护。
-# 劫持域名清单一旦分叉，就会出现「这份报了那份没报」的怪事。
+# 但「两份彼此一致」是**不够的** —— 它们可以一起漏掉服务端新增的域名。
+# 实测就是这么发生的：两份都只写了 10 个，而服务端 dnsmasq 劫持 **37** 个
+# （少掉 quay.io / ghcr.io / mirrors.aliyun.com / nodejs.org … 共 27 个），
+# 于是「检查 /etc/hosts 有没有钉死劫持域名」这条会静默漏掉三分之二。
+#
+# 所以基准取**服务端那份 dnsmasq.conf**，两份实现都跟它比。
+_SRV_CONF="$DIR/../proxy/dnsmasq/dnsmasq.conf"
+# ⚠️ 先去掉注释再抽域名。否则分组注释里的 `# Node.js 包索引` 会贡献出
+# 一个假域名 `ode.js` —— 实测就是这么误报的。同类教训：**扫代码前先剥注释**。
 _lib_domains=$(sed -n '/^HIJACK_DOMAINS=(/,/^)/p' "$DIR/lib/dns.sh" \
-                 | grep -oE '[a-z0-9.-]+\.[a-z]{2,}' | sort | tr '\n' ' ')
+                 | sed 's/#.*//' | grep -oE '[a-z0-9.-]+\.[a-z]{2,}' | sort -u)
 _dist_domains=$(sed -n '/^HIJACK_DOMAINS=(/,/^)/p' "$DIR/dist/tp.client.sh" \
-                 | grep -oE '[a-z0-9.-]+\.[a-z]{2,}' | sort | tr '\n' ' ')
-if [[ -n "$_lib_domains" && "$_lib_domains" == "$_dist_domains" ]]; then
-    echo "  ✅ 劫持域名清单一致（$(wc -w <<<"$_lib_domains") 个）"
+                 | sed 's/#.*//' | grep -oE '[a-z0-9.-]+\.[a-z]{2,}' | sort -u)
+if [[ -f "$_SRV_CONF" ]]; then
+    _srv_domains=$(grep -oE '^address=/\K[^/]+' "$_SRV_CONF" 2>/dev/null | sort -u)
+    if [[ -z "$_srv_domains" ]]; then
+        _srv_domains=$(sed -n 's|^address=/\([^/]*\)/.*|\1|p' "$_SRV_CONF" | sort -u)
+    fi
+    for pair in "lib:$_lib_domains" "dist:$_dist_domains"; do
+        who="${pair%%:*}"; got="${pair#*:}"
+        miss=$(comm -23 <(printf '%s\n' "$_srv_domains") <(printf '%s\n' "$got"))
+        extra=$(comm -13 <(printf '%s\n' "$_srv_domains") <(printf '%s\n' "$got"))
+        if [[ -z "$miss" && -z "$extra" ]]; then
+            echo "  ✅ $who 与服务端一致（$(wc -l <<<"$_srv_domains") 个）"
+        else
+            echo "  ❌ $who 与服务端 dnsmasq.conf 不一致"
+            [[ -n "$miss"  ]] && echo "     少了: $(tr '\n' ' ' <<<"$miss")"
+            [[ -n "$extra" ]] && echo "     多了: $(tr '\n' ' ' <<<"$extra")"
+            fail=1
+        fi
+    done
+    # 两份实现彼此也要一致（否则会出现「这份报了那份没报」）
+    if [[ "$_lib_domains" == "$_dist_domains" ]]; then
+        echo "  ✅ 两份实现彼此一致"
+    else
+        echo "  ❌ 两份实现不一致"
+        fail=1
+    fi
 else
-    echo "  ❌ 两份的劫持域名清单不一致"
-    echo "     lib : $_lib_domains"
-    echo "     dist: $_dist_domains"
-    fail=1
+    echo "  ⏭  找不到 $_SRV_CONF，跳过（无法核对服务端）"
 fi
 for fn in hosts_pinned_domains hosts_unpin bypass_on bypass_off bypass_active; do
     if grep -q "^${fn}()" "$DIR/lib/dns.sh" && grep -q "^${fn}()" "$DIR/dist/tp.client.sh"; then

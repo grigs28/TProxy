@@ -39,6 +39,28 @@ Copyright (c) 2026 grigs28
 变更记录
 --------
 
+### 2026-09-24
+
+**全网巡检与客户端加固**（66 台，登录成功 44 台；详见
+`docs/2026-09-24-真机巡检与客户端需求分析.md`）
+
+- 客户端兜底块补齐 `print_color` 与 printf 语义 —— 没有分发平台的机器上
+  脚本原本会报「未找到命令」且输出全是字面 `%s`
+- `repair_dnf_repos` 不再递归进 `backup/`，**不再改写备份文件**
+- 无 `dig` 时改用 `nslookup` / `resolvectl` / `getent ahostsv4` 做自检
+- `HIJACK_DOMAINS` 由 10 个补齐到服务端实际劫持的 37 个，守卫测试改为
+  直接解析 `proxy/dnsmasq/dnsmasq.conf` 当基准
+- **`client/dist/tp.client.sh` 纳入版本控制** —— 它被 `.gitignore` 第 9 行的
+  `dist/` 误伤，此前从未入库（与阶段 7「三个核心库文件因 `.gitignore`
+  规则从未入库」是同一个坑，已是第二次）
+
+**巡检发现、尚未处理的第三方环境问题**（非本项目组件，仅记录）
+
+- 内网 DNS `192.168.0.48` 与 `202.99.192.68` 将 `github.com` 答为 `127.0.0.1`，
+  将 `registry-1.docker.io` 答为 Meta 公司的 IP。全网多台机器指向它们，
+  表现为 github 不可用；那些 `/etc/hosts` 里的 `github.com` 记录是绕此封锁的补丁
+- `.16` 处于半接入状态（DNS 已指向本代理但根 CA 未安装），HTTPS 全部失败
+
 ### 2026-09-23
 
 **架构重建**（原 `generator` + `hosts-master.txt` 方案已废弃并移除）

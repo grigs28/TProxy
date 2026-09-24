@@ -97,8 +97,29 @@ is_rpm_like() {
 # 上游一律回 404，被 dnf-makecache.timer 每小时刷 168 次，
 # 把缓存命中率从 70% 压到 31% —— 看起来像缓存坏了，实际毫无问题。
 dnf_metalink_sources() {
-  local d="${1:-/etc/yum.repos.d}"
-  grep -rlE '^[[:space:]]*metalink[[:space:]]*=' "$d" --include='*.repo' 2>/dev/null
+  local d="${1:-/etc/yum.repos.d}" f
+  # ⚠️ 两个约束，都是真机踩出来的（.9 / CentOS 7）：
+  #
+  # ① **只在顶层找，不递归**。原来是 `grep -r ... "$d"`，于是
+  #    /etc/yum.repos.d/backup/ 里的**备份**也被算进来。备份 dnf 根本不读，
+  #    报它是误报；更糟的是 repair_dnf_repos 会照单去"修" ——
+  #    实测把备份里未注释 baseurl 段的 `metalink=` 行**删掉了**，
+  #    备份就此还原不回去，失去存在意义。
+  # ② **只看启用中的段**。整段 enabled=0 的 repo（如 epel-testing.repo）
+  #    dnf 压根不会读，报它只是噪音。enabled 缺省视为启用（dnf 的默认）。
+  for f in "$d"/*.repo; do
+    [[ -f "$f" ]] || continue
+    awk '
+      /^\[/ { sec = $0; gsub(/[][]/, "", sec); next }
+      /^[[:space:]]*enabled[[:space:]]*=/ {
+        v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); gsub(/[[:space:]]/, "", v)
+        off[sec] = (v == "0" || v == "false" || v == "no")
+        next
+      }
+      /^[[:space:]]*metalink[[:space:]]*=/ { has[sec] = 1 }
+      END { for (s in has) if (!off[s]) { print FILENAME; exit } }
+    ' "$f"
+  done
 }
 
 # 判断：哪些 .repo 文件里开着 debuginfo / source / update-source。

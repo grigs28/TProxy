@@ -165,6 +165,71 @@ else
   fail=1
 fi
 
+echo "== 不许碰 backup/ 里的备份（那里的文件 dnf 根本不读）=="
+# 实测 .9（CentOS 7）暴露的：/etc/yum.repos.d/ 下有个 backup/ 子目录，
+# 里面是被替换掉的旧配置 —— dnf 不读它，所以它既不该被报成问题，
+# 更不该被「修复」。改了就还原不回去了，备份的意义就没了。
+mkdir -p "$T/bk9/yum.repos.d/backup"
+cat > "$T/bk9/yum.repos.d/backup/openEuler.repo" <<'EOF'
+[OS]
+name=OS
+baseurl=https://repo.openeuler.org/openEuler-24.03-LTS-SP3/OS/x86_64/
+metalink=https://mirrors.openeuler.org/metalink?repo=$releasever/OS&arch=$basearch
+enabled=1
+EOF
+cat > "$T/bk9/yum.repos.d/active.repo" <<'EOF'
+[OS]
+name=OS
+baseurl=https://repo.openeuler.org/openEuler-24.03-LTS-SP3/OS/x86_64/
+metalink=https://mirrors.openeuler.org/metalink?repo=$releasever/OS&arch=$basearch
+enabled=1
+EOF
+got=$(dnf_metalink_sources "$T/bk9/yum.repos.d")
+if [[ "$got" == *active.repo* && "$got" != *backup* ]]; then
+  echo "  ✅ 只报活动配置，没报 backup/"
+else
+  echo "  ❌ 把 backup/ 也报出来了: $(tr '\n' ' ' <<<"$got")"
+  fail=1
+fi
+before=$(md5sum "$T/bk9/yum.repos.d/backup/openEuler.repo" | cut -d' ' -f1)
+BACKUP_DIR="$T/bk" repair_dnf_repos "$T/bk9/yum.repos.d" >/dev/null
+if [[ "$before" == "$(md5sum "$T/bk9/yum.repos.d/backup/openEuler.repo" | cut -d' ' -f1)" ]]; then
+  echo "  ✅ 备份文件一字未动"
+else
+  echo "  ❌ 备份被改写了 —— 还原不回去，备份失去意义"
+  diff <(printf '') "$T/bk9/yum.repos.d/backup/openEuler.repo" >/dev/null 2>&1 || true
+  fail=1
+fi
+
+echo "== 全段 enabled=0 的 repo 不该被报（dnf 不会读它）=="
+mkdir -p "$T/off/yum.repos.d"
+cat > "$T/off/yum.repos.d/epel-testing.repo" <<'EOF'
+[epel-testing]
+name=EPEL Testing
+#baseurl=http://download.example/pub/epel/testing/7/$basearch
+metalink=https://mirrors.fedoraproject.org/metalink?repo=testing-epel7
+enabled=0
+
+[epel-testing-debuginfo]
+name=EPEL Testing Debug
+metalink=https://mirrors.fedoraproject.org/metalink?repo=testing-debug-epel7
+enabled=0
+EOF
+cat > "$T/off/yum.repos.d/on.repo" <<'EOF'
+[epel]
+name=EPEL
+baseurl=http://mirror.example/epel/7/$basearch
+metalink=https://mirrors.fedoraproject.org/metalink?repo=epel-7
+enabled=1
+EOF
+got=$(dnf_metalink_sources "$T/off/yum.repos.d")
+if [[ "$got" == *on.repo* && "$got" != *epel-testing* ]]; then
+  echo "  ✅ 只报启用中的，enabled=0 的不报"
+else
+  echo "  ❌ enabled=0 的也被报出来了: $(tr '\n' ' ' <<<"$got")"
+  fail=1
+fi
+
 echo "== 检出启用中的企业版源（非订阅会 401）=="
 mkdir -p "$T/d"
 cat > "$T/d/pve-enterprise.sources" <<'EOF'
