@@ -47,7 +47,7 @@
 #        不依赖 wget.sh —— 直接用系统 wget 取文件
 #  版本号：每次修改递增，10 进位
 # ============================================================
-VERSION="0.1.9"
+VERSION="0.2.0"
 set -uo pipefail
 
 source /opt/grigs/bas.sh 2>/dev/null || {
@@ -450,6 +450,16 @@ check_docker_conf() {
 
     if ! docker_conf_valid "$f"; then
         print_error "  %s 不是合法 JSON —— Docker 会起不来，请先修好它" "$f"
+        return 1
+    fi
+
+    # 处理 daemon.json 依赖 python3 解析 JSON（刻意不用 sed/awk —— 写坏了
+    # Docker 起不来，比「缓存没命中」严重得多）。没有 python3 的机器
+    # （实测 .9 CentOS7 / .17 istoreos）要**明说处理不了**，
+    # 否则会静默失败，用户以为已经处理过了。
+    if ! command -v python3 >/dev/null 2>&1 && [[ -n "$(docker_conf_mirrors "$f")" ]]; then
+        print_error "  本机没有 python3，无法安全修改 %s（不做文本改写：写坏它 Docker 会起不来）" "$f"
+        print_info "  请手工删掉其中的 registry-mirrors，或先装 python3"
         return 1
     fi
 
@@ -1681,6 +1691,44 @@ do_verify() {
     fi
 }
 
+# 综合「DNS 是否指向本代理」与「CA 是否已装入信任库」两个事实，给**一句话结论**。
+#
+# 为什么要单独判：这两件事分开看都是中性的，**合起来才有意义**。
+# 实测 `.16` 就是这样 —— DNS 已指 `.18`（劫持生效、37 个域名全被 MITM），
+# 但根 CA 没装 → 所有 HTTPS 报 `curl: (60) unable to get local issuer certificate`。
+# 这台机器**比没接入时更不可用**（没接入时至少还能直连公网）。
+# 原先 `--status` 只给两条普通 warning，看着像「差一步没配完」，说不破要害。
+#
+# 返回值同时是退出码，调用方据此决定报 success 还是 error：
+#   ok(0) / broken(1) / stale-ca(2) / not-onboarded(3)
+onboard_verdict() {
+    local dns_is_proxy="$1" ca_installed="$2"
+    if [[ "$dns_is_proxy" == "1" && "$ca_installed" == "1" ]]; then
+        printf '%s\n' "ok"; return 0
+    elif [[ "$dns_is_proxy" == "1" ]]; then
+        printf '%s\n' "broken"; return 1
+    elif [[ "$ca_installed" == "1" ]]; then
+        printf '%s\n' "stale-ca"; return 2
+    else
+        printf '%s\n' "not-onboarded"; return 3
+    fi
+}
+
+# 当前 /etc/resolv.conf 是否把本代理放在首位（劫持才会真正生效）
+dns_points_to_proxy() {
+    [[ -f /etc/resolv.conf ]] || return 1
+    local first
+    first=$(awk '/^[[:space:]]*nameserver/{print $2; exit}' /etc/resolv.conf)
+    [[ "$first" == "$TPROXY_SERVER" ]]
+}
+
+# CA 是否已装入系统信任库
+ca_in_system_trust() {
+    [[ -f "/etc/pki/ca-trust/source/anchors/${CA_NAME}" ]] || \
+    [[ -f "/usr/local/share/ca-certificates/${CA_NAME}" ]] || \
+    [[ -f "/etc/ssl/certs/${CA_NAME}" ]]
+}
+
 show_status() {
     print_step "TProxy 接入状态"
     print_info "目标服务器: %s" "$TPROXY_SERVER"
@@ -1689,6 +1737,30 @@ show_status() {
     [[ -f /etc/resolv.conf ]] && sed 's/^/    /' /etc/resolv.conf || echo "    (不存在)"
     echo
     print_info "DNS 机制: %s" "$(detect_dns_manager)"
+    # systemd-resolved 会**并行**查询多个 DNS 取最快返回 —— 公网结果可能抢在
+    # 代理之前，使劫持彻底失效。接入时脚本会关掉它，但状态查询不该改系统，
+    # 所以这里只告警，让用户知道「劫持可能没生效」的原因在哪。
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        print_warning "systemd-resolved 正在运行 —— 它并行查询多个 DNS，公网结果可能抢在代理之前，使劫持失效"
+        print_info "  接入时会自动关闭它: w.sh tp.client.sh -i"
+    fi
+    echo
+    # ---- 一句话结论 ----
+    local _dns=0 _ca=0
+    dns_points_to_proxy && _dns=1
+    ca_in_system_trust && _ca=1
+    local _verdict
+    _verdict=$(onboard_verdict "$_dns" "$_ca")
+    case "$_verdict" in
+      ok)            print_success "接入状态: 正常（DNS 走代理 + CA 已装）" ;;
+      broken)        print_error "接入状态: 【不可用】DNS 已指向代理，但根 CA 未装入信任库"
+                     print_error "  → 劫持域名的 HTTPS 会全部失败（curl 报 60 / unknown CA）"
+                     print_error "  → 这比没接入更糟：原本直连公网至少能用"
+                     print_info "  修复: w.sh tp.client.sh -i（或只补证书 -c）" ;;
+      stale-ca)      print_warning "接入状态: CA 已装，但 DNS 未指向代理 —— 缓存不会命中"
+                     print_info "  修复: w.sh tp.client.sh -d（或完整接入 -i）" ;;
+      not-onboarded) print_info "接入状态: 未接入" ;;
+    esac
     echo
     # 只看不改：状态查询不该动系统文件
     if is_debian_like; then
