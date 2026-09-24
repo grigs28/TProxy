@@ -6,7 +6,12 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
+# 锚定根目录。**不能写成 `dist/`** —— 那样在任意深度都匹配，
+# 会把 client/dist/tp.client.sh 一起吃掉：它是**手工维护的分发脚本**
+# （见 client/README.md 的「修改流程」），不是构建产物。
+# 后果实测过：push 里一直不含它，NAS 那份成了唯一副本，
+# 且干净克隆没有 dist/，三组「两份实现不许分叉」守卫直接报红。
+/dist/
 downloads/
 eggs/
 .eggs/
