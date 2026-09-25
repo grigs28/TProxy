@@ -12,6 +12,64 @@
 
 ---
 
+## [0.5.3] - 2026-09-25
+
+### 修复：`.18`（服务端自己）的 dnf，与 gh-cli 的 GPG key
+
+#### 1. `.18` 的死 Nexus 仓库
+
+```
+$ sudo dnf update -y
+Errors during downloading metadata for repository 'nexus-openeuler-os':
+  - Curl error (7): Couldn't connect to server for http://192.168.0.18:8081/repository/openEuler-24.03-OS/
+```
+
+与 `.16` 同一个病（`nexus-openeuler.repo` 里 3 个段指向已下线的 `:8081`）。
+
+**为什么它能一直没修**：`.18` 是**唯一不能跑 `-i` 的机器** —— 脚本的 `install_dns`
+会把它的 DNS 改成 `192.168.0.18`，而它就是 `192.168.0.18`，**成环**。
+所以它一直不在正常修复路径上。本次是**只抽出 `repair_dnf_repos` 单独调**
+（与之前清它的 git 残留同一手法）。
+
+修后：`dnf makecache` → Metadata cache created；`repolist` 只剩 5 个正式仓库。
+
+#### 2. gh-cli 的 GPG key 失效（`.14` / `.18`）
+
+`.14` 上修完 `.github.com` 子域的 DNS 之后，dnf 能下载了，于是暴露出下一层：
+
+```
+The GPG keys listed for the "packages for the GitHub CLI" repository are
+already installed but they are not correct for this package.
+Error: GPG check FAILED
+```
+
+**根因**：`gh-cli.repo` 的 `gpgkey` 指向 `keyserver.ubuntu.com` 上的**单个 key**
+（`0x23F3D4EA75716059`）—— 那是社区做法。而 GitHub CLI **轮换/新增了签名密钥**：
+
+```
+gh_2.101.0 的实际签名     密钥 ID 62313325   → NOKEY（未导入）
+repo 里配的               75716059           → 旧 key
+官方 keyring 里当前有 4 个  75716059 / E90714157 / 62313325 / 6C97E579
+```
+
+**修法**：`gpgkey` 改用官方 keyring
+（`https://cli.github.com/packages/githubcli-archive-keyring.gpg`），
+并把其中的 key 导入。
+
+⚠️ 两个坑：
+- `rpm --import <官方 keyring .gpg>` **不行**（二进制 keybox，报「公钥 1 不受到保护」）。
+  要用 `gpg --no-default-keyring --keyring X.gpg --export --armor` 转成 ASCII 再导入。
+- 修完 `dnf makecache` 与 `dnf update --assumeno` 都要各跑一遍 —— **元数据不需要
+  GPG，只有装包才校验**，只看 makecache 会以为没事。
+
+修后 `dnf upgrade -y gh` → `gh version 2.101.0 (2026-09-15)` ✓
+
+### 一个待补的脚本缺口
+
+`.18` 永远不能跑 `-i`，每次只能手工抽函数。**建议**给脚本加一条保护：
+当 `--server` 指向本机自己时，`install_dns` 跳过（或明确拒绝并说明），
+其余检查与修复照跑。这样 `.18` 也能一键体检。
+
 ## [0.5.2] - 2026-09-25
 
 ### 修复：github.com 的子域被劫持却没人服务（`.14` 的 dnf 报 SSL 失败）
