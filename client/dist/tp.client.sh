@@ -47,7 +47,7 @@
 #        不依赖 wget.sh —— 直接用系统 wget 取文件
 #  版本号：每次修改递增，10 进位
 # ============================================================
-VERSION="0.2.4"
+VERSION="0.2.5"
 
 # ⚠️ **必须先 source、后 `set -u`** —— 顺序反了会在某些机器上直接静默退出。
 #
@@ -1117,6 +1117,25 @@ check_system_repo() {
                 [[ -n "$f" ]] && print_info "    %s" "$f"
             done <<< "$r"
         fi
+
+        # 仓库签名 key 未导入 —— **只报不自动改**：导入哪个 key 是人的决定，
+        # 自动从 keyserver 抓 key 等于把信任根交给它。
+        #
+        # 为什么必须单独查：这类问题的症状是「`dnf makecache` 一切正常、
+        # 只有装包才报 GPG check FAILED」，极易误判成网络或仓库坏了。
+        # 实测 .14/.18 的 gh-cli：配的 key 是 75716059，而包是用 62313325 签的。
+        local gk
+        gk=$(dnf_gpgkey_missing)
+        if [[ -n "$gk" ]]; then
+            print_warning "  以下 dnf 仓库的签名 key 未导入 —— 装包会报 GPG check FAILED"
+            print_info "    （注意：dnf makecache 不校验 GPG，只看它会以为一切正常）"
+            local _s _b _k
+            while IFS=$'\t' read -r _s _b _k; do
+                [[ -n "$_s" ]] && print_info "    %s  签名 key %s（%s）" "$_s" "$_k" "$_b"
+            done <<< "$gk"
+            print_info "    修法：把仓库 gpgkey 指向的 key 导入（rpm --import <key>），"
+            print_info "          或改用该仓库官方的 keyring（单个 key 会随上游轮换失效）"
+        fi
         # ⚠️ 判据必须**列全所有检测项**（nx / m / r）。
         # 漏一个就会出现「报了问题、却说正常、还不修」——
         # 实测 .16：metalink 与冗余段上一轮已修好（m、r 皆空），
@@ -1199,6 +1218,27 @@ check_system_repo() {
 # 而自检用的 `dig` 绕过 NSS（直接问 nameserver），永远看不到它 ——
 # 表现为「自检全绿、劫持其实完全没生效」，真实程序直连公网。
 # 本项目已经踩过两次（.18 服务端、.19 客户端），两次都报的绿灯。
+
+# 目标服务器是否**就是本机**。
+#
+# 为什么需要：`.18` 是服务端，它的 DNS 必须是公网 —— 若把它指向自己就成了环，
+# 它连一个域名都查不出来（而它恰恰要为全网回源）。
+# 所以服务端**不能**执行 install_dns。有了这个判据，脚本就能在服务端上跑
+# 除 DNS 之外的全部检查与修复，而不是整条 `-i` 都跑不了。
+# 实测：`.18` 的死 Nexus 仓库、git 残留都因此长期没被自动修过，只能手工抽函数。
+is_self_target() {
+  # ⚠️ 用 ${VAR:-} 取值：直接 source 本文件时（如测试）TPROXY_SERVER 可能没设，
+  #    而调用方常带 set -u —— 不这样写会直接「未绑定的变量」退出。
+  local want="${TPROXY_SERVER:-${TPROXY_DNS_PRIMARY:-}}" ip
+  [[ -n "$want" ]] || return 1
+  for ip in $(hostname -I 2>/dev/null); do
+    [[ "$ip" == "$want" ]] && return 0
+  done
+  # 回退：直接读网卡。hostname -I 在精简系统（OpenWrt 等）上可能没有。
+  ip -o -4 addr show 2>/dev/null | awk '{split($4, a, "/"); print a[1]}' \
+    | grep -qx "$want" && return 0
+  return 1
+}
 
 # 判断：列出被钉死的劫持域名。只读，不改任何东西。
 # 报的是【被破坏的劫持域名】而非文件里的每条主机名 —— 用户关心的是
@@ -1851,16 +1891,43 @@ do_verify() {
       getent) print_warning "  %s 会读 /etc/hosts，结果含 NSS 覆盖，语义与 dig 不同" "$tool" ;;
     esac
 
-    print_info "DNS 解析（应指向 %s）" "$TPROXY_SERVER"
-    for d in "${HIJACK_DOMAINS[@]}"; do
-        ip=$(resolve_first_ip "$d")
-        if [[ "$ip" == "$TPROXY_SERVER" ]]; then
-            print_success "  %s -> %s" "$d" "$ip"
-        else
-            print_warning "  %s -> %s（期望 %s）" "$d" "${ip:-解析失败}" "$TPROXY_SERVER"
+    # ⚠️ 本机即服务端时这一轮**语义相反**：它不该把域名解析到自己（那是环），
+    #    而应解析到真实上游 —— 它得替全网回源。所以改成验「能不能解析出公网地址」。
+    if is_self_target; then
+        print_info "DNS 解析（本机即服务端，验能否解析到真实上游）"
+        local bad=0
+        for d in "${HIJACK_DOMAINS[@]}"; do
+            ip=$(resolve_first_ip "$d")
+            if [[ -n "$ip" && "$ip" != "$TPROXY_SERVER" ]]; then
+                print_success "  %s -> %s" "$d" "$ip"
+            else
+                print_warning "  %s -> %s（应能解析到真实地址，而不是本机）" "$d" "${ip:-解析失败}"
+                bad=$((bad + 1))
+            fi
+        done
+        # ⚠️ 个别域名解析不出来**不算失败** —— 上游域名会失效。
+        # 实测 `mirrorlist.centos.org` 就解析不出来：CentOS 7 早已 EOL、域名已撤。
+        # 服务端的职责是「把还存在的上游解析出来」，不是「保证每个历史域名都活着」。
+        # 所以只在**大面积失败**时才判定它自身的 DNS 有问题。
+        if (( bad > ${#HIJACK_DOMAINS[@]} / 2 )); then
+            print_error "  %s/%s 个域名解析不出来 —— 服务端自身的 DNS 很可能有问题" \
+                "$bad" "${#HIJACK_DOMAINS[@]}"
             fail=1
+        elif (( bad > 0 )); then
+            print_info "  %s 个域名解析不出来（多为上游已失效，不影响服务端）" "$bad"
         fi
-    done
+    else
+        print_info "DNS 解析（应指向 %s）" "$TPROXY_SERVER"
+        for d in "${HIJACK_DOMAINS[@]}"; do
+            ip=$(resolve_first_ip "$d")
+            if [[ "$ip" == "$TPROXY_SERVER" ]]; then
+                print_success "  %s -> %s" "$d" "$ip"
+            else
+                print_warning "  %s -> %s（期望 %s）" "$d" "${ip:-解析失败}" "$TPROXY_SERVER"
+                fail=1
+            fi
+        done
+    fi
 
     # dig 绕过 NSS，所以上面那轮全绿**不代表真实程序走对了路**：
     # /etc/hosts 会压过 DNS，而 dig 看不到它。这条检查就是为了补上这个盲区。
@@ -2003,7 +2070,14 @@ show_status() {
     if is_rpm_like && [[ -n "$(dead_nexus_repos)" ]]; then
         print_error "dnf 源指向已下线的 Nexus（%s 个文件）—— dnf 会直接报 Curl error" "$(dead_nexus_repos | wc -l)"
         print_info "  重新接入可自动停用: w.sh tp.client.sh -i"
-        print_info "  重新接入可自动修复: w.sh tp.client.sh -i"
+    fi
+    # 只报不改：导入哪个 key 是人的决定（自动从 keyserver 抓 = 把信任根交给它）
+    if is_rpm_like && [[ -n "$(dnf_gpgkey_missing)" ]]; then
+        print_error "dnf 仓库的签名 key 未导入 —— 装包会报 GPG check FAILED（makecache 看不出来）"
+        while IFS=$'\t' read -r _s _b _k; do
+            [[ -n "$_s" ]] && print_info "    %s  签名 key %s" "$_s" "$_k"
+        done <<< "$(dnf_gpgkey_missing)"
+        print_info "  修法见 CHANGELOG 0.5.3：改用仓库官方 keyring，并 rpm --import 其中的 key"
     fi
     if [[ -n "$(git_redirects)" ]]; then
         print_warning "git 配置把请求重定向到了别处（绕过缓存）"
@@ -2272,6 +2346,88 @@ repair_git_config() {
 }
 
 
+# ============================================================
+# dnf 仓库的「签名 key 未导入」
+# ============================================================
+#
+# 为什么值得查：`gpgcheck=1` 的仓库若签名 key 没导入，症状是
+# **`dnf makecache` 一切正常、只有装包才报 `GPG check FAILED`** ——
+# 非常容易误判成「网络问题」或「仓库坏了」。
+#
+# 实测（.14 / .18，2026-09-25）：gh-cli.repo 的 gpgkey 指向 keyserver 上的
+# **单个 key**（0x23F3D4EA75716059），而 GitHub CLI 轮换了签名密钥 ——
+# gh 2.101.0 是用 62313325 签的，配的却是 75716059：
+#   The GPG keys listed ... are not correct for this package. / GPG check FAILED
+#
+# 便宜的检测点：仓库**元数据**的签名 key 与**包**是同一个（实测都是 62313325），
+# 所以取 repomd.xml.asc（约 800 字节）就够，**不必下载几十 MB 的包**。
+
+# 从 repomd.xml.asc 解出签名 keyid。输出**后 8 位小写**（与
+# `rpm -q gpg-pubkey` 的 %{VERSION} 格式一致）。取不到返回空、退出码 1。
+gpgkey_id_from_asc() {
+  local f="$1" id
+  [[ -s "$f" ]] || return 1
+  id=$(gpg --list-packets "$f" 2>/dev/null \
+       | awk '/keyid [0-9A-Fa-f]+/{print $NF; exit}')
+  [[ -n "$id" ]] || return 1
+  id=$(tr 'A-F' 'a-f' <<<"$id")
+  printf '%s\n' "${id: -8}"
+}
+
+# 已导入的 rpm 公钥（后 8 位小写，一行一个）。单独成函数是为了**可测** ——
+# 测试里可以覆盖它，不必真去动系统 keyring。
+rpm_imported_keys() {
+  rpm -q gpg-pubkey --qf '%{VERSION}\n' 2>/dev/null | tr 'A-F' 'a-f' | sort -u
+}
+
+# 展开 baseurl 里的 dnf 变量。展不开的（仍含 `$`）返回空，调用方应跳过。
+_expand_repo_vars() {
+  local s="$1" rv
+  s=${s//'$basearch'/$(uname -m)}
+  rv=$(rpm -E '%{?releasever}' 2>/dev/null)
+  [[ -n "$rv" && "$rv" != '%{?releasever}' ]] && s=${s//'$releasever'/$rv}
+  [[ "$s" == *'$'* ]] && return 1
+  printf '%s\n' "$s"
+}
+
+# 判断：哪些 dnf 仓库的签名 key 没导入。只读。
+# 输出：<repoid>\t<baseurl>\t<keyid>，一行一个。
+#
+# 只查 **enabled=1 且 gpgcheck=1 且有 baseurl** 的段：
+#   · gpgcheck=0 的仓库不校验，报了是噪音
+#   · 只有 mirrorlist/metalink 的段取不到确定的 repomd 地址，跳过
+#   · 取不到 repomd.xml.asc 时**不报**（宁可漏报，不假报）
+dnf_gpgkey_missing() {
+  local d="${1:-/etc/yum.repos.d}" f sec base en gp url tmp id
+  local keys; keys=$(rpm_imported_keys)
+  for f in "$d"/*.repo; do
+    [[ -f "$f" ]] || continue
+    while IFS=$'\t' read -r sec base en gp; do
+      [[ -n "$sec" && -n "$base" ]] || continue
+      [[ "$en" == "0" || "$gp" == "0" ]] && continue
+      base=$(_expand_repo_vars "$base") || continue
+      url="${base%/}/repodata/repomd.xml.asc"
+      tmp=$(mktemp) || continue
+      if curl -fsSL --max-time 15 -o "$tmp" "$url" 2>/dev/null; then
+        id=$(gpgkey_id_from_asc "$tmp") || id=""
+        [[ -n "$id" ]] && ! grep -qx "$id" <<<"$keys" \
+          && printf '%s\t%s\t%s\n' "$sec" "$base" "$id"
+      fi
+      rm -f "$tmp"
+    done < <(awk '
+      function flush() {
+        if (sec != "" && base != "") print sec "\t" base "\t" en "\t" gp
+      }
+      /^\[/ { flush(); sec = $0; gsub(/[][]/, "", sec); base = ""; en = "1"; gp = "1"; next }
+      /^[ \t]*baseurl[ \t]*=/  { v = $0; sub(/^[^=]*=[ \t]*/, "", v); base = v }
+      /^[ \t]*enabled[ \t]*=/  { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/[ \t]/, "", v); en = v }
+      /^[ \t]*gpgcheck[ \t]*=/ { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/[ \t]/, "", v); gp = v }
+      END { flush() }
+    ' "$f")
+  done
+}
+
+
 case "$ACTION" in
     status)
         show_status
@@ -2283,6 +2439,12 @@ case "$ACTION" in
     dns)
         check_root
         ensure_cmd dig "$(dig_package)" || print_warning "缺少 dig，自检的 DNS 部分会跳过"
+        # `-d` 就是要改 DNS，而服务端不能改 —— 明确拒绝，别默默把服务端弄成环
+        if is_self_target; then
+            print_error "目标 %s 就是本机 —— 服务端不能把 DNS 指向自己（会成环）" "$TPROXY_SERVER"
+            print_info "  服务端请用 -i（它会自动跳过 DNS 那一步，其余照跑）"
+            exit 1
+        fi
         install_dns
         do_verify
         ;;
@@ -2302,7 +2464,16 @@ case "$ACTION" in
         check_system_repo || true
         print_step "检查 Docker 配置"
         check_docker_conf || true
-        install_dns
+        # ⚠️ 目标就是本机时**跳过 DNS** —— 服务端（.18）的 DNS 必须是公网，
+        #    指向自己会成环，它连一个域名都查不出来（而它恰恰要为全网回源）。
+        #    其余检查与修复照跑，这样服务端也能一键体检。
+        if is_self_target; then
+            print_step "DNS 配置（已跳过）"
+            print_warning "  目标 %s 就是本机 —— 服务端不能把 DNS 指向自己（会成环）" "$TPROXY_SERVER"
+            print_info "  其余检查与修复已照常执行"
+        else
+            install_dns
+        fi
         install_cert
         do_verify
         echo

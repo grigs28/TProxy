@@ -322,3 +322,24 @@ restore_dns_config() {
   echo "⚠️  未找到原始配置备份，请手动检查 /etc/resolv.conf"
   return 1
 }
+
+# 目标服务器是否**就是本机**。
+#
+# 为什么需要：`.18` 是服务端，它的 DNS 必须是公网 —— 若把它指向自己就成了环，
+# 它连一个域名都查不出来（而它恰恰要为全网回源）。
+# 所以服务端**不能**执行 install_dns。有了这个判据，脚本就能在服务端上跑
+# 除 DNS 之外的全部检查与修复，而不是整条 `-i` 都跑不了。
+# 实测：`.18` 的死 Nexus 仓库、git 残留都因此长期没被自动修过，只能手工抽函数。
+is_self_target() {
+  # ⚠️ 用 ${VAR:-} 取值：直接 source 本文件时（如测试）TPROXY_SERVER 可能没设，
+  #    而调用方常带 set -u —— 不这样写会直接「未绑定的变量」退出。
+  local want="${TPROXY_SERVER:-${TPROXY_DNS_PRIMARY:-}}" ip
+  [[ -n "$want" ]] || return 1
+  for ip in $(hostname -I 2>/dev/null); do
+    [[ "$ip" == "$want" ]] && return 0
+  done
+  # 回退：直接读网卡。hostname -I 在精简系统（OpenWrt 等）上可能没有。
+  ip -o -4 addr show 2>/dev/null | awk '{split($4, a, "/"); print a[1]}' \
+    | grep -qx "$want" && return 0
+  return 1
+}

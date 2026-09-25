@@ -118,6 +118,28 @@ else
     fail=1
 fi
 
+echo "== is_self_target：服务端要认得出「目标是自己」=="
+# 为什么需要：`.18` 是服务端，DNS 必须走公网 —— 指向自己会成环，
+# 它连一个域名都查不出来（而它恰恰要为全网回源）。
+# 有了这个判据，脚本才能在服务端上跑除 DNS 之外的全部检查修复 ——
+# 否则整条 -i 都跑不了，`.18` 的死 Nexus 就是因此长期没被自动修过。
+_save_server="${TPROXY_SERVER:-}"
+TPROXY_SERVER="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [[ -n "$TPROXY_SERVER" ]] && is_self_target; then
+    echo "  ✅ 本机 IP（$TPROXY_SERVER）被认作自己"
+else
+    echo "  ❌ 没认出本机 IP"
+    fail=1
+fi
+TPROXY_SERVER="203.0.113.99"
+if is_self_target; then
+    echo "  ❌ 外部 IP 被误判为自己"
+    fail=1
+else
+    echo "  ✅ 外部 IP 不误判"
+fi
+TPROXY_SERVER="${_save_server:-192.168.0.18}"
+
 echo "== 劫持域名清单必须【随服务端】，不能两份互抄 =="
 # client/lib/*.sh 与 dist/tp.client.sh 是同一工具的两份实现，各自手工维护。
 # 但「两份彼此一致」是**不够的** —— 它们可以一起漏掉服务端新增的域名。
@@ -161,7 +183,7 @@ if [[ -f "$_SRV_CONF" ]]; then
 else
     echo "  ⏭  找不到 $_SRV_CONF，跳过（无法核对服务端）"
 fi
-for fn in hosts_pinned_domains hosts_unpin bypass_on bypass_off bypass_active; do
+for fn in hosts_pinned_domains hosts_unpin bypass_on bypass_off bypass_active is_self_target; do
     if grep -q "^${fn}()" "$DIR/lib/dns.sh" && grep -q "^${fn}()" "$DIR/dist/tp.client.sh"; then
         echo "  ✅ 两份都有 $fn"
     else

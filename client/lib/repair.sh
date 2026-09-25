@@ -670,3 +670,84 @@ repair_git_config() {
   rm -f "$tmp"
   return 0
 }
+
+# ============================================================
+# dnf 仓库的「签名 key 未导入」
+# ============================================================
+#
+# 为什么值得查：`gpgcheck=1` 的仓库若签名 key 没导入，症状是
+# **`dnf makecache` 一切正常、只有装包才报 `GPG check FAILED`** ——
+# 非常容易误判成「网络问题」或「仓库坏了」。
+#
+# 实测（.14 / .18，2026-09-25）：gh-cli.repo 的 gpgkey 指向 keyserver 上的
+# **单个 key**（0x23F3D4EA75716059），而 GitHub CLI 轮换了签名密钥 ——
+# gh 2.101.0 是用 62313325 签的，配的却是 75716059：
+#   The GPG keys listed ... are not correct for this package. / GPG check FAILED
+#
+# 便宜的检测点：仓库**元数据**的签名 key 与**包**是同一个（实测都是 62313325），
+# 所以取 repomd.xml.asc（约 800 字节）就够，**不必下载几十 MB 的包**。
+
+# 从 repomd.xml.asc 解出签名 keyid。输出**后 8 位小写**（与
+# `rpm -q gpg-pubkey` 的 %{VERSION} 格式一致）。取不到返回空、退出码 1。
+gpgkey_id_from_asc() {
+  local f="$1" id
+  [[ -s "$f" ]] || return 1
+  id=$(gpg --list-packets "$f" 2>/dev/null \
+       | awk '/keyid [0-9A-Fa-f]+/{print $NF; exit}')
+  [[ -n "$id" ]] || return 1
+  id=$(tr 'A-F' 'a-f' <<<"$id")
+  printf '%s\n' "${id: -8}"
+}
+
+# 已导入的 rpm 公钥（后 8 位小写，一行一个）。单独成函数是为了**可测** ——
+# 测试里可以覆盖它，不必真去动系统 keyring。
+rpm_imported_keys() {
+  rpm -q gpg-pubkey --qf '%{VERSION}\n' 2>/dev/null | tr 'A-F' 'a-f' | sort -u
+}
+
+# 展开 baseurl 里的 dnf 变量。展不开的（仍含 `$`）返回空，调用方应跳过。
+_expand_repo_vars() {
+  local s="$1" rv
+  s=${s//'$basearch'/$(uname -m)}
+  rv=$(rpm -E '%{?releasever}' 2>/dev/null)
+  [[ -n "$rv" && "$rv" != '%{?releasever}' ]] && s=${s//'$releasever'/$rv}
+  [[ "$s" == *'$'* ]] && return 1
+  printf '%s\n' "$s"
+}
+
+# 判断：哪些 dnf 仓库的签名 key 没导入。只读。
+# 输出：<repoid>\t<baseurl>\t<keyid>，一行一个。
+#
+# 只查 **enabled=1 且 gpgcheck=1 且有 baseurl** 的段：
+#   · gpgcheck=0 的仓库不校验，报了是噪音
+#   · 只有 mirrorlist/metalink 的段取不到确定的 repomd 地址，跳过
+#   · 取不到 repomd.xml.asc 时**不报**（宁可漏报，不假报）
+dnf_gpgkey_missing() {
+  local d="${1:-/etc/yum.repos.d}" f sec base en gp url tmp id
+  local keys; keys=$(rpm_imported_keys)
+  for f in "$d"/*.repo; do
+    [[ -f "$f" ]] || continue
+    while IFS=$'\t' read -r sec base en gp; do
+      [[ -n "$sec" && -n "$base" ]] || continue
+      [[ "$en" == "0" || "$gp" == "0" ]] && continue
+      base=$(_expand_repo_vars "$base") || continue
+      url="${base%/}/repodata/repomd.xml.asc"
+      tmp=$(mktemp) || continue
+      if curl -fsSL --max-time 15 -o "$tmp" "$url" 2>/dev/null; then
+        id=$(gpgkey_id_from_asc "$tmp") || id=""
+        [[ -n "$id" ]] && ! grep -qx "$id" <<<"$keys" \
+          && printf '%s\t%s\t%s\n' "$sec" "$base" "$id"
+      fi
+      rm -f "$tmp"
+    done < <(awk '
+      function flush() {
+        if (sec != "" && base != "") print sec "\t" base "\t" en "\t" gp
+      }
+      /^\[/ { flush(); sec = $0; gsub(/[][]/, "", sec); base = ""; en = "1"; gp = "1"; next }
+      /^[ \t]*baseurl[ \t]*=/  { v = $0; sub(/^[^=]*=[ \t]*/, "", v); base = v }
+      /^[ \t]*enabled[ \t]*=/  { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/[ \t]/, "", v); en = v }
+      /^[ \t]*gpgcheck[ \t]*=/ { v = $0; sub(/^[^=]*=[ \t]*/, "", v); gsub(/[ \t]/, "", v); gp = v }
+      END { flush() }
+    ' "$f")
+  done
+}
