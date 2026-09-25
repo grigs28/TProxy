@@ -36,15 +36,22 @@ HIJACK_DOMAINS=(
   repo.openeuler.org mirrors.openeuler.org dl-cdn.openeuler.openatom.cn
   # Ubuntu
   archive.ubuntu.com security.ubuntu.com cn.archive.ubuntu.com ports.ubuntu.com
+  # Debian（PVE 机群全靠它）+ Proxmox
+  deb.debian.org security.debian.org download.proxmox.com
   # CentOS / EPEL
   mirror.centos.org mirrorlist.centos.org dl.fedoraproject.org mirrors.fedoraproject.org
   # 国内镜像站
   mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn mirrors.ustc.edu.cn mirrors.huaweicloud.com
+  mirrors.cloud.tencent.com
+  # AI / GPU 工具
+  nvidia.github.io developer.download.nvidia.com
   # Docker 镜像仓库
   registry-1.docker.io auth.docker.io production.cloudflare.docker.com
   quay.io gcr.io ghcr.io k8s.gcr.io registry.k8s.io mcr.microsoft.com nvcr.io
   # Git 仓库
   github.com gitlab.com gitee.com
+  # GitHub CLI 的包仓库（RPM 源，.14/.18 在用）
+  cli.github.com
   # Python 包索引
   pypi.org files.pythonhosted.org pypi.tuna.tsinghua.edu.cn
   # Node.js 包索引

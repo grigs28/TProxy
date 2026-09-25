@@ -291,6 +291,101 @@ else
   fail=1
 fi
 
+echo "== 全新 PVE：移走企业版源后【必须补上】no-subscription =="
+# 背景（2026-09-25，在全新装的 PVE 10.10.10.116 上发现）：
+# 官方默认只有**订阅版**（pve-enterprise + ceph enterprise）。
+# 我们过去只「移走错的」，没「补上对的」—— 于是全新机器修完变成
+# **一个 Proxmox 源都没有**，组件静默失去全部更新。
+# 老机器上因为 ve.client.sh 留了 pve-no-subscription.list 而"看起来对"，
+# 全新机器才露出来。
+#
+# ve.client.sh 在这一点上做得比我们全：它明确「移走什么就补什么」。
+mkdir -p "$T/fresh/sources.list.d"
+: > "$T/fresh/sources.list"
+cat > "$T/fresh/sources.list.d/debian.sources" <<'EOF'
+Types: deb
+URIs: http://deb.debian.org/debian/
+Suites: trixie trixie-updates
+Components: main contrib non-free-firmware
+EOF
+cat > "$T/fresh/sources.list.d/pve-enterprise.sources" <<'EOF'
+Types: deb
+URIs: https://enterprise.proxmox.com/debian/pve
+Suites: trixie
+Components: pve-enterprise
+Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+EOF
+cat > "$T/fresh/sources.list.d/ceph.sources" <<'EOF'
+Types: deb
+URIs: https://enterprise.proxmox.com/debian/ceph-squid
+Suites: trixie
+Components: enterprise
+Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+EOF
+# 完整流程：先禁企业版，再补 no-subscription
+# 真实调用形态：**移走前**先捕获，移走后按捕获值补
+_comps=$(proxmox_components "$T/fresh/sources.list.d")
+BACKUP_DIR="$T/bk1" disable_enterprise_sources "$T/fresh/sources.list.d" >/dev/null
+BACKUP_DIR="$T/bk1" ensure_nosubscription_sources "$T/fresh/sources.list.d" trixie "$_comps" >/dev/null
+if [[ -f "$T/fresh/sources.list.d/proxmox.sources" ]] \
+   && grep -q 'pve-no-subscription' "$T/fresh/sources.list.d/proxmox.sources"; then
+  echo "  ✅ 补上了 proxmox.sources（pve-no-subscription）"
+else
+  echo "  ❌ 没补 pve 源 —— 全新 PVE 会一个 Proxmox 源都没有"
+  fail=1
+fi
+if [[ -f "$T/fresh/sources.list.d/ceph.sources" ]] \
+   && grep -q 'no-subscription' "$T/fresh/sources.list.d/ceph.sources"; then
+  echo "  ✅ 补上了 ceph.sources（no-subscription）"
+else
+  echo "  ❌ 没补 ceph 源"
+  fail=1
+fi
+
+echo "== 补的源地址必须是【被劫持】的那个（否则绕过缓存）=="
+if grep -q 'URIs: http://download.proxmox.com/debian/pve' "$T/fresh/sources.list.d/proxmox.sources" 2>/dev/null; then
+  echo "  ✅ 用 download.proxmox.com（2026-09-25 已加入 dnsmasq 劫持，走缓存）"
+else
+  echo "  ❌ 地址不对：$(grep URIs "$T/fresh/sources.list.d/proxmox.sources" 2>/dev/null)"
+  fail=1
+fi
+
+echo "== 纯 Debian 机器不得【凭空】加 Proxmox 源 =="
+mkdir -p "$T/plain/sources.list.d"
+: > "$T/plain/sources.list"
+cp "$T/fresh/sources.list.d/debian.sources" "$T/plain/sources.list.d/"
+BACKUP_DIR="$T/bk2" ensure_nosubscription_sources "$T/plain/sources.list.d" trixie >/dev/null 2>&1
+if [[ -z "$(ls "$T/plain/sources.list.d/" | grep -i proxmox)" ]] \
+   && [[ ! -f "$T/plain/sources.list.d/ceph.sources" ]]; then
+  echo "  ✅ 什么都没加"
+else
+  echo "  ❌ 给纯 Debian 机器加了 Proxmox 源"
+  fail=1
+fi
+
+echo "== 已有 no-subscription 时【幂等】，不重复写 =="
+mkdir -p "$T/has/sources.list.d"
+: > "$T/has/sources.list"
+cp "$T/fresh/sources.list.d/debian.sources" "$T/has/sources.list.d/"
+cp "$T/fresh/sources.list.d/proxmox.sources" "$T/has/sources.list.d/"
+mkdir -p "$T/has/sources.list.d/backup"
+cp "$T/fresh/sources.list.d/ceph.sources" "$T/has/sources.list.d/backup/ceph.sources.old"
+before=$(md5sum "$T/has/sources.list.d/proxmox.sources" | cut -d' ' -f1)
+BACKUP_DIR="$T/bk3" ensure_nosubscription_sources "$T/has/sources.list.d" trixie >/dev/null 2>&1
+if [[ "$before" == "$(md5sum "$T/has/sources.list.d/proxmox.sources" | cut -d' ' -f1)" ]]; then
+  echo "  ✅ pve 源未被重写"
+else
+  echo "  ❌ 重复写了 pve 源"
+  fail=1
+fi
+if [[ -f "$T/has/sources.list.d/ceph.sources" ]] \
+   && grep -q 'no-subscription' "$T/has/sources.list.d/ceph.sources"; then
+  echo "  ✅ ceph 从 \$d/backup 里认出来了（ve.client.sh 的约定），补了 no-subscription"
+else
+  echo "  ❌ ceph 没补（backup 里的应当也算「这台机器有这个组件」）"
+  fail=1
+fi
+
 echo "== PVE 源必须【只剩一份】定义（真机 .98 上出现了三份）=="
 # 实测 .98：同一仓库同时有
 #     pve.list                    deb http://download.proxmox.com/debian/pve trixie pve-no-subscription
@@ -418,6 +513,7 @@ for fn in dead_proxy_sources pve_sources_content ceph_sources_content \
           duplicate_suite_lines \
           disable_enterprise_sources dnf_metalink_sources \
           dead_nexus_repos disable_dead_nexus_repos pve_source_files \
+          proxmox_components ensure_nosubscription_sources \
           dnf_redundant_repos repair_dnf_repos is_rpm_like; do
   if grep -q "^${fn}()" "$DIR/lib/repair.sh" && grep -q "^${fn}()" "$DIR/dist/tp.client.sh"; then
     echo "  ✅ 两份都有 $fn"

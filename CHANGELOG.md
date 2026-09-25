@@ -12,6 +12,74 @@
 
 ---
 
+## [0.5.5] - 2026-09-25
+
+### 劫持清单扩容（37 → 44），并补上 PVE 的 no-subscription
+
+两件事都是「看了一台**全新安装**的机器」引出来的。
+
+#### 1. 补 PVE 的 no-subscription（`tp.client.sh` → 0.2.6）—— 按 `ve.client.sh` 的思路
+
+**问题**：PVE 9 全新安装的**官方默认源只有订阅版**
+（`pve-enterprise.sources` + `ceph.sources`，都指向 `enterprise.proxmox.com`）。
+我们过去只做「把错的移走」，**没做「把对的补上」** —— 于是全新机器修完变成
+**一个 Proxmox 源都没有**，组件静默失去全部更新。
+
+**为什么一直没暴露**：`.143`/`.144` 那批有旧脚本留下的 `pve-no-subscription.list`，
+被我们第 ② 步转成了 `proxmox.sources` —— **看起来是对的**。全新机器没有那个残留。
+
+**改法**：按 NAS 上 `ve/ve.client.sh` 的思路 —— 它明确「move_to_backup 两个 →
+configure_pve_sources 补两个」。保留我们自己的正确之处：**codename 用 trixie**
+（它写的是 bookworm，对 PVE 9 是错的）、**deb822 格式**、有去重。
+
+新增 `proxmox_components` / `_nosub_enabled` / `ensure_nosubscription_sources`。
+
+⚠️ **两个必须记住的点**：
+- **判据是「这台机器本来有没有 Proxmox 组件」**，不能给纯 Debian 机器无脑装。
+- **必须在「移走企业版源之前」捕获组件清单** —— 移走之后现场就看不出来了。
+  且**刻意不扫我们自己的 `${BACKUP_DIR}/apt`**：那是历史备份，会把
+  「以前配过 Proxmox、后来删了」的机器误判成 Proxmox 主机。
+  （第一版扫了它，测试里的纯 Debian 用例立刻被误加。）
+
+#### 2. 劫持清单 37 → 44（扫全网实际用到的仓库地址得来，不是凭印象加的）
+
+扫了全网 36 台的 apt/dnf 仓库地址，与劫持清单比对，**在用却没劫持的**有 7 个：
+
+| 域名 | 台数 | 说明 |
+|---|---|---|
+| **`deb.debian.org`** | **16** | Debian 主源 —— 最大一块，此前一直在直连 |
+| **`security.debian.org`** | **16** | Debian 安全源 |
+| **`download.proxmox.com`** | **14** | PVE/PBS/Ceph |
+| `nvidia.github.io` | 2 | nvidia-container-toolkit |
+| `cli.github.com` | 2 | gh CLI 的 RPM 源 |
+| `developer.download.nvidia.com` | 1 | `.71` |
+| `mirrors.cloud.tencent.com` | 1 | `.9` 的 EPEL |
+
+**无人使用的一律不加**（项目原则：无缓存实例就不劫持）——
+`download.docker.com`/`deb.nodesource.com`/`apt.postgresql.org`/`pkgs.k8s.io`/
+`apt.grafana.com`/`repo.zabbix.com`/`artifacts.elastic.co`。`enterprise.proxmox.com`
+也跳过（订阅源，加了零收益）。
+
+**顺带修正**：`cli.github.com` 今天早些时候刚从劫持里**摘出来**（当时 tengine 不服务它），
+现在补上了服务块，就**移回劫持**、并从 `server=/…` 例外里去掉 —— 两件事是一体的。
+
+**改动**：dnsmasq 44 条 `address=`、os-repo.conf **两个块都加**（HTTP 块 + HTTPS 块，
+免得某个源走 https 就落到 default_server）、7 张新证书、客户端 `HIJACK_DOMAINS`、
+`proxy/tests/test-dns.sh`。
+
+**实测**（`.143`）：
+
+```
+deb.debian.org          X-Cache-Status: MISS → HIT  ✓
+security.debian.org     MISS → HIT  ✓
+download.proxmox.com    HIT  → HIT  ✓
+nvidia.github.io (443)  MISS → HIT  ✓  ← HTTPS 块也生效
+```
+
+⚠️ **一个运维要点**：给 dnsmasq 加 `address=` 后，若该名字**已在 dnsmasq 缓存里**，
+新规则**不生效**（日志里是 `cached … ` 而不是 `config … is`）—— **必须重启** dnsmasq。
+实测 `deb.debian.org` 是 CNAME，被解析过一次后 `address=` 就压不过缓存了。
+
 ## [0.5.4] - 2026-09-25
 
 ### 新增：gh-cli 那类「仓库签名 key 未导入」的检查，与「服务端也能跑 -i」

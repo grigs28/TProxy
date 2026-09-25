@@ -19,8 +19,11 @@ check() {  # check <描述> <期望> <实际>
 echo "== 劫持测试（应全部返回 $HOST_IP）=="
 for d in repo.openeuler.org mirrors.openeuler.org dl-cdn.openeuler.openatom.cn \
          archive.ubuntu.com security.ubuntu.com cn.archive.ubuntu.com ports.ubuntu.com \
+         deb.debian.org security.debian.org download.proxmox.com \
          mirror.centos.org mirrorlist.centos.org dl.fedoraproject.org mirrors.fedoraproject.org \
-         mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn mirrors.ustc.edu.cn mirrors.huaweicloud.com; do
+         mirrors.aliyun.com mirrors.tuna.tsinghua.edu.cn mirrors.ustc.edu.cn mirrors.huaweicloud.com \
+         mirrors.cloud.tencent.com nvidia.github.io developer.download.nvidia.com \
+         cli.github.com; do
   check "$d" "$HOST_IP" "$($DIG "$d" +short | head -1)"
 done
 
@@ -50,9 +53,13 @@ echo "== github.com 的子域必须【放行】（劫持了却不服务 = 把机
 #    「若某域名无缓存实例，应同时从 dnsmasq 劫持清单和 server_name 中移除」。
 #
 #    下面断言这些例外**仍然存在**，防止被当成冗余配置清理掉。
+#
+#    ⚠️ 例外清单**不是固定的**：某个子域一旦被 tengine 服务（如 cli.github.com
+#       后来补了服务块），就该从例外里移掉、加进上面的劫持断言 —— 两件事是一体的。
 CONF="$(dirname "$0")/../dnsmasq/dnsmasq.conf"
-for d in api.github.com codeload.github.com cli.github.com ssh.github.com gist.github.com; do
-  n=$(grep -cE "^server=/${d//./\\.}/" "$CONF" 2>/dev/null || echo 0)
+for d in api.github.com codeload.github.com ssh.github.com gist.github.com; do
+  n=$(grep -cE "^server=/${d//./\\.}/" "$CONF" 2>/dev/null)
+  n=${n:-0}
   if [[ "$n" -ge 1 ]]; then
     echo "  ✅ $d 有放行规则（$n 条）"
   else

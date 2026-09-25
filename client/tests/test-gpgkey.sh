@@ -114,7 +114,7 @@ echo "== 函数定义必须在主 dispatch 之前 =="
 # ⚠️ 这个错本轮**犯了两次**（工具链那次、GPG 这次）：把函数追加到文件末尾，
 #    而 `case "$ACTION" in` 在它之前 —— bash 执行到哪定义到哪，
 #    运行时就是「未找到命令」。单测全绿也挡不住（测试是 source 整个文件）。
-_disp=$(grep -n '^case "\$ACTION" in' "$DIR/dist/tp.client.sh" | head -1 | cut -d: -f1)
+_disp=$(command grep -n '^case "\$ACTION" in' "$DIR/dist/tp.client.sh" | head -1 | cut -d: -f1)
 while read -r fn; do
   [[ -z "$fn" ]] && continue
   _ln=$(grep -n "^${fn}()" "$DIR/dist/tp.client.sh" | head -1 | cut -d: -f1)

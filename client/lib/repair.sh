@@ -751,3 +751,81 @@ dnf_gpgkey_missing() {
     ' "$f")
   done
 }
+
+# ============================================================
+# 企业版源被禁用后，补上对应的 no-subscription
+# ============================================================
+#
+# 背景（2026-09-25，在全新装的 PVE `10.10.10.116` 上发现）：
+# PVE 9 全新安装的**官方默认源只有订阅版** ——
+#   pve-enterprise.sources / ceph.sources（都指向 enterprise.proxmox.com）。
+# 我们过去只做「把错的移走」，**没做「把对的补上」**，于是全新机器修完变成
+# **一个 Proxmox 源都没有**，组件静默失去全部更新。
+#
+# 为什么一直没暴露：`.143`/`.144` 那批机器上有旧脚本留下的
+# `pve-no-subscription.list`，我们的第 ② 步把它转成了 `proxmox.sources` ——
+# **看起来是对的**。全新机器没有那个残留，才露出来。
+#
+# NAS 上的 `ve/ve.client.sh` 在这一点上做得比我们全：它明确
+# 「move_to_backup 两个 → configure_pve_sources 补两个」。
+# 这里按它的思路补，但保留我们自己的正确之处：**codename 用 trixie**
+# （它写的是 bookworm，对 PVE 9 是错的）、**deb822 格式**、地址用
+# `download.proxmox.com`（2026-09-25 已加入 dnsmasq 劫持，走缓存）。
+
+# 这台机器有哪些 Proxmox 组件（pve / ceph-squid …）。
+#
+# ⚠️ **必须同时看 `$d/backup`** —— 企业版源是被 `disable_enterprise_sources`
+#    **移进 backup** 的，只看 `$d` 的话移走之后就判断不出来了。
+proxmox_components() {
+  local d="${1:-$APT_SOURCES_D}"
+  # 扫**两个**地方：
+  #   $d          当前启用中的
+  #   $d/backup   ve.client.sh 的约定（它 move_to_backup 到这里）
+  #
+  # ⚠️ **刻意不扫我们自己的 `${BACKUP_DIR}/apt`** —— 那里的备份是**历史的**，
+  #    会把「很久以前配过 Proxmox、后来删了」的纯 Debian 机器误判成 Proxmox 主机，
+  #    然后凭空给它装上 pve 源。实测踩过：把两者放一起扫，测试里的纯 Debian
+  #    用例立刻被误加。
+  #
+  #    正确做法是**在移走之前捕获**（调用方先调一次本函数拿到清单，再
+  #    disable_enterprise_sources，最后把清单传给 ensure_nosubscription_sources）。
+  local f
+  for f in "$d" "$d/backup"; do
+    [[ -d "$f" ]] || continue
+    grep -rhoE 'proxmox[.]com/debian/(pve|ceph-[a-z]+)' "$f" 2>/dev/null
+  done | sed 's|.*/||' | sort -u
+}
+
+# 某个组件的 no-subscription 源是否**已启用**（backup 里的不算）。
+_nosub_enabled() {
+  local comp="$1" d="${2:-$APT_SOURCES_D}" f
+  for f in "$d"/*.sources "$d"/*.list; do
+    [[ -f "$f" ]] || continue
+    grep -qE "proxmox[.]com/debian/${comp}" "$f" 2>/dev/null || continue
+    grep -q 'no-subscription' "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
+# 补齐 no-subscription 源。返回 0=有改动、1=无需、2=写失败。
+#
+# **判据是「这台机器本来有没有 Proxmox 组件」** —— 不能给一台纯 Debian
+# 机器无脑装 pve 源。
+# $3 = **移走前**捕获的组件清单（可选）。给了就用它，不再自己扫 ——
+# 因为企业版源此时已被移走，现场已经看不出来了。
+ensure_nosubscription_sources() {
+  local d="${1:-$APT_SOURCES_D}" codename="${2:-$(detect_codename)}"
+  local comps="${3:-}" did=0
+  [[ -n "$comps" ]] || comps=$(proxmox_components "$d")
+  [[ -n "$comps" ]] || return 1
+
+  if grep -qx 'pve' <<<"$comps" && ! _nosub_enabled 'pve' "$d"; then
+    pve_sources_content "$codename" > "$d/proxmox.sources" || return 2
+    did=1
+  fi
+  if grep -qE '^ceph-' <<<"$comps" && ! _nosub_enabled 'ceph-[a-z]+' "$d"; then
+    ceph_sources_content "$codename" > "$d/ceph.sources" || return 2
+    did=1
+  fi
+  [[ $did -eq 1 ]]
+}
