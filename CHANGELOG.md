@@ -12,6 +12,55 @@
 
 ---
 
+## [0.5.6] - 2026-09-26
+
+### 修复：CNAME 型劫持域名会被「一次 AAAA 追链」打穿（44 个里 17 个中招）
+
+**问题**：生产上 `deb.debian.org` 的劫持**已经失效**，而它**有 16 台机器在用** ——
+那些机器的 apt 流量全部在直连公网、绕过缓存：
+
+```
+$ dig @127.0.0.1 deb.debian.org A
+deb.debian.org.           1084 IN CNAME debian.map.fastlydns.net.
+debian.map.fastlydns.net.  292 IN A     151.101.66.132     ← 真实公网 IP
+```
+
+dnsmasq 日志里是 `cached deb.debian.org is <CNAME>` 而**不是** `config …… is 192.168.0.18`。
+
+**根因**：`address=/域名/IP` **只提供 A 记录**。四步走完就失效，且**全程无需重启**：
+
+1. 客户端查 **AAAA**（glibc 的 `getaddrinfo` 默认 A 与 AAAA 并行发送，几乎必然发生）
+2. dnsmasq 无 AAAA 可答 → **转发上游** → 上游回复里该域名是条 **CNAME**
+3. 客户端**追链**去查 CNAME 目标 → 把目标的**真实 A 记录**灌进 dnsmasq 缓存
+   （生产日志佐证：`debian.map.fastlydns.net` 被 6 台机器**直接查询 134 次**）
+4. **CNAME 是类型无关的** → 此后连 A 查询也命中它 → 劫持彻底失效
+
+`min-cache-ttl=300` 让污染至少粘 5 分钟，期间的每次查询都在续期。
+**与既有那个坑的区别**：那个要重启才显形，这个**运行中自行发生**。
+
+**影响面**：44 个劫持域名中 **17 个真实是 CNAME**，全都会被一次追链打穿 ——
+生产上只是 `deb.debian.org` 恰好先中招。其余 16 个（`download.proxmox.com`、
+`files.pythonhosted.org`、`mirrors.aliyun.com`、`gitee.com` …）都只差一次查询。
+
+**修法**：给每个劫持域名补一条 **`local=/域名/`**，令 dnsmasq 自认权威、**永不转发** ——
+AAAA 于是返回 NODATA 而不是转发拿回 CNAME，**CNAME 根本不再暴露给客户端**。
+
+实测两个反例（都验证过，都不行）：
+`filter-AAAA` 仍转发仍缓存 → 无效；只加 `address=/域名/::` 能用，但会给客户端发假的 `::`。
+
+**关键交互已钉住**：`local=/github.com/` 不会压掉 `server=/api.github.com/…` 那几条
+子域例外（dnsmasq 里更具体的域名优先）—— 否则 api/codeload 会被劫持到本机却无人服务。
+
+**验证**：
+- 新增 `proxy/tests/test-dns-poison.sh` —— **自带 dnsmasq 实例**（缺陷是有状态的，
+  在跑着的生产实例上测既测不准又会把生产缓存搞脏）。判定「是不是 CNAME」**绕过被测实例**
+  直接问公网上游，否则修好后 AAAA 回 NODATA，测试会空洞地通过。
+  修前 **17/17 全红**，修后 **17/17 全绿**。
+- `proxy/tests/test-dns.sh` 增加静态守卫：每个 `address=` 必须配对 `local=`。
+- `dnsmasq --test` 语法通过。
+
+---
+
 ## [0.5.5] - 2026-09-25
 
 ### 劫持清单扩容（37 → 44），并补上 PVE 的 no-subscription

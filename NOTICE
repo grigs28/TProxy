@@ -39,6 +39,20 @@ Copyright (c) 2026 grigs28
 变更记录
 --------
 
+### 2026-09-26
+
+**修复 CNAME 型劫持域名被「一次 AAAA 追链」打穿**（详见 `CHANGELOG.md` 0.5.6、
+`docs/stages/0.5.6-dnsmasq劫持抗污染.md`）
+
+- `address=/域名/IP` **只提供 A 记录**；客户端查 AAAA（glibc 默认 A/AAAA 并行发）
+  时 dnsmasq 转发上游拿回 **CNAME**，客户端追链后把**真实 A 记录**灌进缓存 ——
+  而 **CNAME 类型无关**，此后连 A 查询也命中它，**劫持失效且无需重启**。
+- 44 个劫持域名中 **17 个**真实是 CNAME，全都会中招；生产上 `deb.debian.org`
+  （16 台机器在用）已实际失效。
+- 修法：每个劫持域名补 `local=/域名/`，令 dnsmasq 自认权威、永不转发。
+- 新增 `proxy/tests/test-dns-poison.sh`（自带实例，不碰生产缓存）与
+  `test-dns.sh` 的 `address=`/`local=` 成对静态守卫。
+
 ### 2026-09-24
 
 **全网巡检与客户端加固**（66 台，登录成功 44 台；详见

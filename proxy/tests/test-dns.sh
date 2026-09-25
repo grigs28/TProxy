@@ -81,6 +81,31 @@ fi
 # 而 github.com 本身仍必须被劫持
 check "github.com 仍被劫持" "$HOST_IP" "$($DIG github.com +short | head -1)"
 
+echo "== 每个劫持域名必须 address= 与 local= 成对（静态检查）=="
+# ⚠️ 缺 local= 的劫持域名会被「一次 AAAA 追链」打穿，且**运行中自行发生**：
+#    address= 只提供 A 记录 → 客户端查 AAAA 时 dnsmasq 转发上游 → 拿到 CNAME →
+#    客户端追链查 CNAME 目标 → 真实 A 记录进缓存 → CNAME 类型无关 →
+#    此后连 A 查询也命中它 → 劫持失效。
+#    实测 44 个劫持域名中 17 个真实是 CNAME，全都会中招；
+#    生产上 deb.debian.org（16 台机器在用）已经中招。
+#    行为级回归测试见 tests/test-dns-poison.sh（自带实例，不碰生产缓存）。
+_n_pair=0
+while read -r d; do
+  [[ -z "$d" ]] && continue
+  if ! grep -qE "^local=/${d//./\\.}/$" "$CONF" 2>/dev/null; then
+    echo "  ❌ $d 缺 local=/ —— 会被 AAAA 追链打穿"
+    fail=1
+  else
+    _n_pair=$((_n_pair+1))
+  fi
+done < <(command grep -oE '^address=/[^/]+/' "$CONF" 2>/dev/null | sed 's|address=/||;s|/$||' | sort -u)
+if [[ $_n_pair -gt 0 ]]; then
+  echo "  ✅ $_n_pair 个劫持域名全部成对"
+else
+  echo "  ❌ 一个 address= 都没解析出来 —— 检查逻辑本身出问题了"
+  fail=1
+fi
+
 if [[ $fail -eq 0 ]]; then
   echo "DNS-ALL-PASS"
 else
