@@ -106,6 +106,38 @@ else
   fail=1
 fi
 
+echo "== 劫持域名的三件套必须齐全（劫持 / 服务 / 证书）=="
+# ⚠️ 三件事缺一不可，缺了就是「劫持了却不服务」—— 比不劫持更糟：
+#    客户端被导到 .18，却拿不到匹配的证书，HTTPS 直接断。
+#    实测症状：`SSL connect error ... tlsv1 alert internal error`（.14 的 gh-cli 源）。
+#
+#    ⚠️ 其中**证书那一项最阴**：证书长期有效、CA 重建极少发生，
+#    所以漏掉一个域名可能几个月都不出事 —— 直到某次重建才集体爆掉。
+#    实测 2026-09-26：`ca/domains.txt` 曾缺 7 个域名（0.5.5 新增的那批），
+#    而 .18 上证书齐全，属于**已埋雷但未引爆**。
+_CA="$(dirname "$0")/../ca"
+_n_ok=0
+while read -r d; do
+  [[ -z "$d" ]] && continue
+  _bad=""
+  command grep -qE "^${d//./\\.}$" "$_CA/domains.txt" 2>/dev/null || _bad="$_bad domains.txt"
+  command grep -qhE "(^|[[:space:]])${d//./\\.}([[:space:]]|;|$)" "$(dirname "$0")"/../tengine/conf.d/*.conf 2>/dev/null \
+    || _bad="$_bad tengine"
+  [[ -f "$_CA/certs/$d.crt" ]] || _bad="$_bad 证书"
+  if [[ -n "$_bad" ]]; then
+    echo "  ❌ $d 缺:$_bad"
+    fail=1
+  else
+    _n_ok=$((_n_ok+1))
+  fi
+done < <(command grep -oE '^address=/[^/]+/' "$CONF" 2>/dev/null | sed 's|address=/||;s|/$||' | sort -u)
+if [[ $_n_ok -gt 0 ]]; then
+  echo "  ✅ $_n_ok 个劫持域名三件套齐全"
+else
+  echo "  ❌ 一个都没对上 —— 检查路径或解析逻辑"
+  fail=1
+fi
+
 if [[ $fail -eq 0 ]]; then
   echo "DNS-ALL-PASS"
 else

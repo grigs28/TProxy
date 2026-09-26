@@ -1,5 +1,18 @@
 # proxy/ca/domains.txt —— 需签发证书的域名，每行一个
-# 计划 A 范围：系统包仓库
+#
+# ⚠️ **本文件必须覆盖 dnsmasq 的全部劫持域名，一个都不能少。**
+#    `deploy.sh` 是靠**遍历本文件**来签发证书的 —— 某个劫持域名若不在
+#    这里，**CA 重建后它就没有证书**，而 tengine 又确实在服务它，
+#    结果是「劫持了却拿不出匹配的证书」，客户端的 HTTPS 直接断
+#    （实测症状：`SSL connect error ... tlsv1 alert internal error`）。
+#
+#    这个坑很隐蔽：**证书是长期有效的，CA 重建又极少发生** ——
+#    所以漏掉一个域名可能几个月都不出事，直到某次重建才集体爆掉。
+#    实测 2026-09-26：本文件曾缺 7 个域名（正是 0.5.5 新增的那批），
+#    而 .18 上证书齐全，属于「已埋雷但未引爆」。
+#
+#    守卫：`proxy/tests/test-dns.sh` 会断言「劫持清单 ⊆ 本文件 ⊆ 已签证书」。
+#
 # openEuler
 repo.openeuler.org
 mirrors.openeuler.org
@@ -9,6 +22,10 @@ archive.ubuntu.com
 security.ubuntu.com
 cn.archive.ubuntu.com
 ports.ubuntu.com
+# Debian（PVE 机群 16 台在用）+ Proxmox（14 台）
+deb.debian.org
+security.debian.org
+download.proxmox.com
 # CentOS / EPEL
 mirror.centos.org
 mirrorlist.centos.org
@@ -19,6 +36,7 @@ mirrors.aliyun.com
 mirrors.tuna.tsinghua.edu.cn
 mirrors.ustc.edu.cn
 mirrors.huaweicloud.com
+mirrors.cloud.tencent.com
 # Docker
 registry-1.docker.io
 auth.docker.io
@@ -31,10 +49,15 @@ registry.k8s.io
 mcr.microsoft.com
 # NVIDIA NGC（AI 镜像，公开仓库可匿名拉取）
 nvcr.io
+# AI / GPU 工具（.70/.71 的 nvidia-container-toolkit 源）
+nvidia.github.io
+developer.download.nvidia.com
 # Git
 github.com
 gitlab.com
 gitee.com
+# GitHub CLI 的包仓库（RPM 源，.14/.18 在用）
+cli.github.com
 # Python
 pypi.org
 files.pythonhosted.org

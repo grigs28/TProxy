@@ -12,6 +12,48 @@
 
 ---
 
+## [0.5.7] - 2026-09-26
+
+### 修复：`ca/domains.txt` 漏了 7 个劫持域名 —— CA 重建会丢证书
+
+**问题**：`deploy.sh` 是靠**遍历 `ca/domains.txt`** 签发证书的，而该文件
+**缺了 7 个劫持域名** —— 正是 0.5.5 新增的那批：
+
+```
+deb.debian.org            security.debian.org        download.proxmox.com
+cli.github.com            nvidia.github.io           developer.download.nvidia.com
+mirrors.cloud.tencent.com
+```
+
+`.18` 上证书**目前齐全**（手工签过），所以**暂时没事** —— 但**只要 CA 重建一次**，
+这 7 个域名就没有证书，而 tengine 又确实在服务它们，结果是
+「劫持了却拿不出匹配的证书」，**Debian / Proxmox / GitHub-CLI / nvidia 源的
+HTTPS 全线断掉**（症状同 `SSL connect error ... tlsv1 alert internal error`）。
+
+**为什么隐蔽**：证书长期有效、CA 重建极少发生 —— 漏一个域名可能**几个月都不出事**，
+直到某次重建才集体爆掉。属于「**已埋雷但未引爆**」，正常巡检发现不了。
+
+**修法**：补齐 `domains.txt`（37 → 44），并在文件头写明
+「本文件必须覆盖 dnsmasq 的全部劫持域名」这条不变量。
+
+**守卫**：`test-dns.sh` 新增「三件套齐全」断言 ——
+每个劫持域名必须同时满足 **劫持（`address=`）／服务（tengine `server_name`）／
+证书（`certs/<域名>.crt`）**。三件套的比对此前散落各处、无人交叉核对。
+负例已验证能拦住（从 `domains.txt` 删一个 → 报 `缺: domains.txt`；
+把证书改名 → 报 `缺: 证书`）。
+
+**同轮全清单交叉核对结果**（四个权威清单）：
+
+| 比对 | 结果 |
+|---|---|
+| `address=` vs `local=`（44） | ✅ 完全一致 |
+| 劫持清单 vs `tengine server_name` | ✅ 无缺失 |
+| 劫持清单 vs `.18` 实际证书 | ✅ 无缺失 |
+| 劫持清单 vs 客户端 `HIJACK_DOMAINS`（44） | ✅ 一致 |
+| 劫持清单 vs `ca/domains.txt` | ❌ **缺 7 个** ← 本次修复 |
+
+---
+
 ## [0.5.6] - 2026-09-26
 
 ### 修复：CNAME 型劫持域名会被「一次 AAAA 追链」打穿（44 个里 17 个中招）

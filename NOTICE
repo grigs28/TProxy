@@ -41,6 +41,14 @@ Copyright (c) 2026 grigs28
 
 ### 2026-09-26
 
+**修复 `ca/domains.txt` 漏 7 个劫持域名**（详见 `CHANGELOG.md` 0.5.7）
+
+- `deploy.sh` 靠**遍历 `ca/domains.txt`** 签发证书；该文件曾缺 7 个劫持域名
+  （0.5.5 新增的那批）。`.18` 上证书齐全故**暂时未爆**，但 **CA 重建后会丢证书**，
+  导致 Debian / Proxmox / GitHub-CLI / nvidia 源的 HTTPS 全线断。
+- 已补齐（37 → 44），`test-dns.sh` 新增「三件套齐全」守卫：
+  每个劫持域名必须同时满足 **劫持 / tengine 服务 / 证书**。
+
 **修复 CNAME 型劫持域名被「一次 AAAA 追链」打穿**（详见 `CHANGELOG.md` 0.5.6、
 `docs/stages/0.5.6-dnsmasq劫持抗污染.md`）
 
