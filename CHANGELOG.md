@@ -12,6 +12,50 @@
 
 ---
 
+## [0.5.8] - 2026-10-08
+
+### 修复：Git 协议 v2 的 POST 被 smart-git 返 500，git 报「错误的行长度字符：500」
+
+**问题**：带 `Git-Protocol: version=2` 头的 POST 请求（`command=ls-refs` /
+`command=fetch`）进了缓存层后，**smart-git 不支持 v2 的 POST 命令**，一律返回
+HTTP 500 + 26 字节文本 `500 Internal Server Error\n`（Go `http.Error` 签名）。
+git 客户端按 pkt-line 协议解析响应体，前 4 字节是 `500 `（空格 0x20 不是合法
+十六进制）→ **`协议错误：错误的行长度字符：500`**。
+那三个字符是**响应体文本的开头，不是 HTTP 状态码的显示**，报错极具误导性。
+
+这是「500 行长度报错」家族的**第三种机制** —— 前两种（HTTP/1.0 流式 POST、
+POST error_page 回落）此前已修，症状文本完全相同。
+
+**影响面**：真实 git 客户端**不中招**（v2 是协商制，GET 应答无 v2 标识就回退 v0，
+实测 v2 clone 也能成功）。中招的是**固定发 v2 body 的实现**：go-git、libgit2
+某些封装、自研 CI 拉码工具。
+
+**修法**：`git.conf` 的 map 组合加第四位 `git_proto_v2` —— 带 `version=2` 头的
+请求**从一开始就直连** GitHub，不进缓存层。预防性分流，而非出错后回落
+（本 server 段 `proxy_request_buffering off`，POST 体已流走，回落必坏，历史踩过）。
+v2 试探 GET 直连后整条链路自然一致（GitHub 应答 v2 标识，后续 POST 同样直连）。
+对不能出网的客户端无影响（「直连」是 tengine 回源，客户端始终只连 .18）。
+
+**部署**：`nginx -s reload` 平滑重载，无中断。
+
+**验证**（`test-git.sh` 新增断言，对生产实测）：
+
+| 用例 | 修前 | 修后 |
+|---|---|---|
+| v2 ls-refs POST | ❌ 500 + 错误文本 | ✅ 200 + `0032`（合法 pkt-line） |
+| v0 want/have POST | ✅ 200 | ✅ 200（仍走缓存，smart-git 日志确认） |
+| GET 匿名 / 带 v2 头 | ✅ 200 | ✅ 200（各走缓存/直连，互不干扰） |
+| 真实 `git -c protocol.version=2 clone` | ✅（回退 v0） | ✅（走直连，用上真 v2） |
+
+静态守卫：`git.conf` 必须含 `git_proto_v2` 分流 map。
+
+**顺带修了两处过时断言**（`test-git.sh`，gitcache→smart-git 时代残留）：
+端口检查 4999 → 8080 且只在 TARGET 为本机时执行（smart-git 只听 127.0.0.1，
+远程跑 ss 查的是本机必误报）；测试仓库 git/git → octocat/Hello-World
+（巨型仓库首次回源克隆必超时，断言永远 000 误报）。
+
+---
+
 ## [0.5.7] - 2026-09-26
 
 ### 修复：`ca/domains.txt` 漏了 7 个劫持域名 —— CA 重建会丢证书

@@ -39,6 +39,17 @@ Copyright (c) 2026 grigs28
 变更记录
 --------
 
+### 2026-10-08
+
+**修复 Git 协议 v2 POST 被缓存层返 500**（详见 `CHANGELOG.md` 0.5.8、
+`docs/巡检日志/2026-10-08-git-500根因分析.md`）
+
+- smart-git 不支持协议 v2 的 POST 命令，返回 `500 Internal Server Error\n`
+  文本，git 把前 4 字节 `500 ` 当 pkt-line 长度前缀 → 「错误的行长度字符：500」。
+- 修法：git.conf 的 map 加 `git_proto_v2` 维度，v2 请求从一开始直连。
+  真实 git 客户端本就不中招（协商制自动回退 v0），此修复面向 go-git /
+  libgit2 / CI 拉码工具等固定发 v2 的实现。
+
 ### 2026-09-26
 
 **修复 `ca/domains.txt` 漏 7 个劫持域名**（详见 `CHANGELOG.md` 0.5.7）
