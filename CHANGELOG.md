@@ -12,6 +12,51 @@
 
 ---
 
+## [0.5.9] - 2026-10-16
+
+### 修复：tengine 的 resolver 只配 2 台且同厂商，一次丢包就 502
+
+**问题**：git push 报 `The requested URL returned error: 502`。错误日志直指：
+
+```
+[error] github.com could not be resolved (110: Operation timed out),
+        request: "GET /grigs28/TAF-OpenEuler.git/info/refs?service=git-receive-pack"
+```
+
+实测 2026-10-16：git 请求 786 次里 **502 有 29 次（≈3.7%）**，另有 504 两次。
+
+**根因**：`proxy_pass https://$host$request_uri` 含变量 `$host`，nginx 必须用**自己的
+resolver**（自实现的 DNS 客户端，**不走系统 libc**）在运行时解析。而它只配了
+`223.5.5.5 223.6.6.6` 两台、**都属阿里** —— 那条路径抖一下，轮换重试也无处可换。
+
+**关键证据（同一台机、同一时刻）**：
+
+| 解析方式 | 走谁 | 结果 |
+|---|---|---|
+| `getent hosts github.com` | libc | ✅ |
+| `dig @223.5.5.5 github.com`（5/5） | 同一个 DNS | ✅ |
+| 容器内 `curl https://github.com/` | libc | ✅ 200 |
+| **tengine 自己的 resolver** | nginx 自实现 | ❌ 累计失败 310 次 |
+
+差异在于 **libc 会自动重试换服务器，丢包被掩盖；nginx 的 resolver 不会**。
+所以这不是「DNS 坏了」，也不是缓存的问题 ——
+**缓存路径 `proxy_pass http://127.0.0.1:8080` 是字面 IP，根本不走 resolver**。
+
+已排除：conntrack 耗尽（0%）、句柄耗尽、出口代理进程挂掉（机器上无此类进程）、
+DNS 污染（解析出的 `172.182.252.133` 出示合法 github.com 证书）。
+
+**修法**：resolver 2 台 → **5 台、跨 4 家**（阿里×2 + 腾讯 + 114 + 百度），
+`resolver_timeout` 5s → 10s。让轮换重试有得换。
+
+**⚠️ 这是治标**：若丢包来自 `.18` 出网链路的某一跳，所有服务器都受影响，
+仍会有零星失败 —— 根治需抓包定位那一跳。
+
+**验证**：四条路径功能复验全通过（缓存 200 / push 401 / os 包 200 / pypi 200）；
+直连路径连打 60 次 **60/60 成功、0 异常**；`nginx -t` 通过；reload 无中断。
+⚠️ 间歇故障短时间测不出差异，**真实效果需观察一段时间 502 率**。
+
+---
+
 ## [0.5.8] - 2026-10-08
 
 ### 修复：Git 协议 v2 的 POST 被 smart-git 返 500，git 报「错误的行长度字符：500」

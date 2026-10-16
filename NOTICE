@@ -39,6 +39,16 @@ Copyright (c) 2026 grigs28
 变更记录
 --------
 
+### 2026-10-16
+
+**修复 tengine resolver 配置导致的间歇 502**（详见 `CHANGELOG.md` 0.5.9）
+
+- `proxy_pass https://$host...` 需 nginx 自实现的 resolver 运行时解析，而它只配了
+  两台同厂商 DNS（均为阿里），一次丢包即 502（实测 git 请求 502 率 ≈3.7%）。
+  同一时刻 libc / dig / curl 解析同一域名全部正常 —— 差异在于 libc 会自动重试换服务器。
+- 修法：resolver 扩到 5 台跨 4 家，timeout 5s → 10s。
+- 注意：缓存路径（字面 IP）本就不受影响，**去掉 git 缓存不会改善 push**。
+
 ### 2026-10-08
 
 **修复 Git 协议 v2 POST 被缓存层返 500**（详见 `CHANGELOG.md` 0.5.8、
