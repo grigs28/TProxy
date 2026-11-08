@@ -34,6 +34,10 @@ TProxy 项目的文档库：运行环境探查记录、方案调研，以及管�
 
 - [specs/2026-09-23-architecture-design.md](specs/2026-09-23-architecture-design.md) — TProxy 完整架构设计方案（待评审）
 
+**操作方案**（可复用 SOP）
+
+- [方案-新机器接入.md](方案-新机器接入.md) — 新机器接入 TProxy 的标准流程与变体（含「git 不走代理」）
+
 **运行环境记录**（对生产机 `192.168.0.18` 的探查，2026-09 状态）
 
 - [architecture.md](architecture.md) — 架构总览、容器清单、端口与数据流
