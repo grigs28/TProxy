@@ -41,6 +41,15 @@ Copyright (c) 2026 grigs28
 
 ### 2026-11-16
 
+**制品缓存改为 1 天 TTL + 强制重验证**（详见 `CHANGELOG.md` 0.5.11）
+
+- 30d TTL 仍不够：同批 sssd 2.9.4-34 的多个包都被上游原地替换，旧副本供出即校验失败。
+- 改为 `proxy_cache_revalidate on` + `proxy_cache_valid 200 302 1d`，
+  并覆盖 server 级 `use_stale` 去掉 `updating`（旧副本 = 装不上，正确性优先）。
+- 前提：上游支持条件请求（实测 ETag/Last-Modified，304 返回 0B）。
+
+**修复包缓存 365 天 TTL 锁死旧文件**（详见 `CHANGELOG.md` 0.5.10）
+
 **修复包缓存 365 天 TTL 锁死旧文件**（详见 `CHANGELOG.md` 0.5.10）
 
 - 上游会**原地替换**包文件（版本号不变、内容变了）。365d 的制品缓存
