@@ -39,6 +39,18 @@ Copyright (c) 2026 grigs28
 变更记录
 --------
 
+### 2026-11-23
+
+**全部制品缓存改为「自己验证」；修好从未生效的 Maven 缓存**（详见 `CHANGELOG.md` 0.5.12）
+
+- python/nodejs/java 制品 TTL 365d → 1d，并加 `proxy_cache_revalidate on`；
+  覆盖 server 级 `use_stale` 去掉 `updating`。不再依赖上游「不可变」承诺。
+- **Maven 缓存自 2026-09-23 起完全失效**：repo1.maven.org 的每个响应都带
+  Cloudflare 的 `Set-Cookie: __cf_bm=...`，而 nginx 默认不缓存带 Set-Cookie 的响应。
+  修法 `proxy_ignore_headers Set-Cookie;`。
+- 劫持清单新增 `api.nuget.org`（45 个），`.nupkg` 并入制品缓存。
+- `.19` 的 pip 指定系统 CA 包（conda 的 certifi 不含 TProxy 根 CA）。
+
 ### 2026-11-16
 
 **制品缓存改为 1 天 TTL + 强制重验证**（详见 `CHANGELOG.md` 0.5.11）

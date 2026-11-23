@@ -70,3 +70,6 @@ nodejs.org
 repo1.maven.org
 repo.maven.apache.org
 maven.aliyun.com
+
+# .NET / NuGet（BiaoShu 的 openxmlhelper 构建）
+api.nuget.org

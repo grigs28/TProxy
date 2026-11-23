@@ -12,6 +12,71 @@
 
 ---
 
+## [0.5.12] - 2026-11-23
+
+### 全部制品缓存改为「自己验证」，并修好从未生效的 Maven 缓存
+
+#### 1. python / nodejs / java 的制品缓存：365d → **1 天 + 强制重验证**
+
+原先只有 os-repo 的制品用 `proxy_cache_revalidate`（0.5.11），其余三类的
+365 天 TTL **依赖上游「不可变」承诺**。但承诺只是承诺：
+
+| 上游 | 承诺 | 强度 |
+|---|---|---|
+| Maven Central | 禁止覆盖 | 强（服务端强制） |
+| PyPI | 同文件名不可重复上传 | 较强 |
+| **npm** | **72 小时内可 unpublish 再重发** | **弱** |
+| openEuler | 无此承诺（已实测会原地重建） | 无 |
+
+三处制品 location 统一改成与 os-repo 相同的策略：
+
+```nginx
+proxy_cache_valid 200 302 1d;
+proxy_cache_revalidate on;
+proxy_cache_use_stale error timeout http_500 ...;   # 去掉 updating
+```
+
+过期时带上 `If-Modified-Since` / `If-None-Match` 回源：没变回 304（0 字节），
+变了回 200 自动更新。**从「依赖上游承诺」变成「自己验证」**，
+最坏陈旧窗口从 365 天压到 1 天。实测 PyPI / npm / Maven 的响应都带
+`ETag` 与 `Last-Modified`，支持条件请求。
+
+#### 2. 🔴 Maven 缓存**从未真正生效**（9/23 之后零 HIT）
+
+排查中发现 `java.log` 的 HIT 全部集中在 9/23，之后**再没有一次 HIT**。
+
+根因：`repo1.maven.org` 走 Cloudflare，**每个 GET 响应都带**
+`Set-Cookie: __cf_bm=...`（机器人管理 cookie），而 **nginx 默认不缓存带
+Set-Cookie 的响应** —— 于是每个工件都回源。
+
+对比证据：`maven.aliyun.com`（不带 cookie）同一时刻 HIT 正常。
+
+修法：`proxy_ignore_headers Set-Cookie;`（server 级）。公开制品不需要这个 cookie。
+
+验证：同一工件连打 6 次全部 HIT；新工件 MISS → HIT → HIT。
+
+#### 3. 劫持清单新增 `api.nuget.org`（45 个域名）
+
+BiaoShu 的 `openxmlhelper`（.NET）构建要 `dotnet restore`，源是 api.nuget.org，
+原先不在劫持清单 → 每次构建都走外网。已补齐 dnsmasq（address/local）、
+tengine `server_name`（HTTP/HTTPS 两块）、证书（.18 上签发，45 → 46 个），
+并把 `.nupkg` 加入制品 location（1d + 重验证）。
+
+验证：`/v3-flatcontainer/...nupkg` MISS → HIT；内容与直连逐字节一致。
+
+#### 4. `.19` 的 pip 修好 CA
+
+conda 自带的 `certifi` 不含 TProxy 根 CA → `pip` 所有 HTTPS 请求
+`certificate verify failed`。`/etc/pip.conf` 增加：
+
+```ini
+cert = /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+```
+
+验证：`pip3 download six/packaging` 成功，`.18` 的 python.log 确认请求到达。
+
+---
+
 ## [0.5.11] - 2026-11-16
 
 ### 制品缓存改为「1 天 TTL + 强制重验证」—— 上游确认过才提供
