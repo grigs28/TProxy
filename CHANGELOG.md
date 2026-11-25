@@ -12,6 +12,71 @@
 
 ---
 
+## [0.5.13] - 2026-11-25
+
+### 包仓库缓存：可变指针不再缓存，彻底消除「半新半旧」的 apt 校验失败
+
+**现象**：Ubuntu `noble-updates` 的 `apt-get update` 报索引校验失败：
+
+```
+restricted：实际 2,403,491 字节，声明 2,329,323 字节
+main      ：实际 1,842,442 字节，声明 1,799,292 字节
+universe  ：实际 2,184,154 字节，声明 2,182,197 字节
+```
+
+**根因**：`InRelease` 里写着各索引的哈希，而**它与索引文件各自独立缓存、各自过期**。
+指针陈旧时 apt 会拿着旧哈希去取 `/by-hash/SHA256/<旧哈希>` → 上游已删 → 404
+→ 回退到 canonical 路径（已是新版）→ 哈希对不上。
+实测该缓存的 InRelease 曾卡在 11-18 整整一周。
+
+**修法：按「可变性」分层，而不是统一给个 TTL。**
+
+| 类别 | 例子 | 策略 |
+|---|---|---|
+| **① 可变指针** | `InRelease` / `Release` / `Release.gpg` / `repomd.xml` | **不缓存**（代价：apt ~126KB/次，dnf 几 KB） |
+| **② 内容寻址** | `/by-hash/SHA256/<哈希>`、`repodata/<64位hex>-*.xml.gz` | **30 天 + 重验证**（路径即内容，永不改变） |
+| **③ canonical 索引** | `Packages*` / `Sources*` / `Contents*` / `Translation-*` / 非哈希命名的 repodata | **不缓存**（可变，必须与指针一致） |
+| **④ 制品** | `.deb` / `.rpm` / `.nupkg` | 1 天 + 重验证（不变） |
+
+**排查中发现并修掉的两个隐藏问题：**
+
+1. **🔴 `Set-Cookie` 让缓存完全不生效**
+   `archive.ubuntu.com`、`repo1.maven.org` 等走 Cloudflare，**每个响应都带**
+   `Set-Cookie: __cf_bm=...`。nginx 默认「含 Set-Cookie 不缓存」——
+   实测 by-hash 路径返回 200 但 cache 状态为空，**配了 30 天缓存却一次都没写进去**。
+   修法：`proxy_ignore_headers Set-Cookie;`（Maven 那次是逐块加，这次提到 os-repo 顶层）。
+
+2. **🔴 10 个域名只配了 HTTP、没配 HTTPS**
+   `archive.ubuntu.com` / `cn.archive.ubuntu.com` / `ports.ubuntu.com` /
+   `mirror.centos.org` / `mirrorlist.centos.org` / `dl.fedoraproject.org` /
+   `mirrors.fedoraproject.org` / `mirrors.tuna` / `mirrors.ustc` / `mirrors.huaweicloud`
+   —— HTTPS 请求匹配不到 os-repo 的 443 块，**落到 git.conf 的兜底 `location /`**：
+   能代理、能通，但 `proxy_cache off`，**完全不缓存**。
+   实测证据：by-hash 请求被记进 `git.log`（`cache=-`），缓存文件根本没生成。
+
+**验证**（`.18` 实测）：
+
+```
+noble-updates 三索引：main / restricted / universe
+  尺寸 ✅   SHA256 ✅   （声明值与实际文件全部一致）
+InRelease：与上游逐字节一致 ✅
+
+缓存行为分层正确：
+  InRelease / Release / repomd.xml        → 未缓存 ✅
+  canonical Packages.gz                   → 未缓存 ✅
+  by-hash（Debian & Ubuntu）              → MISS → HIT ✅
+  .deb 制品                                → MISS → HIT ✅
+
+已部署服务未受影响：
+  .50 的 BiaoShu 三容器  Up / healthy
+  .50 的 dnf makecache   成功
+```
+
+**代价**：canonical 索引不再缓存（实测客户端很少用 by-hash），
+每次 `apt-get update` 多下几 MB；换来永不再出现「新指针 + 旧索引」的校验失败。
+
+---
+
 ## [0.5.12] - 2026-11-23
 
 ### 全部制品缓存改为「自己验证」，并修好从未生效的 Maven 缓存

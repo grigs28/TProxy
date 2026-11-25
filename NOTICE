@@ -39,6 +39,16 @@ Copyright (c) 2026 grigs28
 变更记录
 --------
 
+### 2026-11-25
+
+**包仓库缓存按可变性分层；消除 apt「半新半旧」校验失败**（详见 `CHANGELOG.md` 0.5.13）
+
+- 可变指针（InRelease/Release/repomd.xml）不再缓存；内容寻址（/by-hash/、哈希命名的
+  repodata）长缓存；canonical 索引（Packages/Sources/Contents）不缓存；制品维持 1d+重验证。
+- 修 `Set-Cookie` 导致缓存完全不生效（Cloudflare 的 `__cf_bm`）。
+- 补齐 HTTPS `server_name` 里缺失的 10 个域名 —— 它们此前落到 git.conf 兜底块，
+  能代理但完全不缓存。
+
 ### 2026-11-23
 
 **全部制品缓存改为「自己验证」；修好从未生效的 Maven 缓存**（详见 `CHANGELOG.md` 0.5.12）
