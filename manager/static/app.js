@@ -257,6 +257,85 @@ async function openMissDialog(type) {
   }
 }
 
+// ---- 最近调用 ----
+// ⚠️ 这是「最近**完成**」不是「正在传」：tengine 的 access log 只在请求结束
+//    时才写盘。真正的在途进度需要 njs 记录请求开始，属于后续阶段 ——
+//    所以这里、以及界面标题，都用「最近调用」而不是「正在下载」。
+let recentPaused = false;
+
+function renderRecent(rows) {
+  const box = $("recent-list");
+  box.innerHTML = "";
+  $("recent-count").textContent = rows.length ? `${rows.length} 条` : "";
+
+  if (!rows.length) {
+    box.appendChild(emptyBox("最近没有请求"));
+    return;
+  }
+
+  for (const r of rows) {
+    const row = document.createElement("div");
+    row.className = "recent-row";
+
+    const t = document.createElement("span");
+    t.className = "recent-time";
+    // ISO 形如 2026-11-28T04:42:26+00:00，只取时分秒
+    t.textContent = (r.time || "").slice(11, 19);
+    t.title = r.time || "";
+
+    const c = document.createElement("span");
+    c.className = "recent-client";
+    c.textContent = r.client;
+
+    const s = document.createElement("span");
+    s.className = "recent-svc";
+    s.textContent = r.service;
+
+    const p = document.createElement("span");
+    p.className = "recent-path";
+    p.textContent = r.path;
+    p.title = `${r.method} ${r.path}`;
+
+    // 缓存列：HIT/STALE/UPDATING 都算由缓存供给（绿），MISS 黄，未启用灰
+    const ca = document.createElement("span");
+    const state = (r.cache || "").toUpperCase();
+    let cls = "none";
+    let label = state || "—";
+    if (["HIT", "STALE", "UPDATING", "REVALIDATED"].includes(state)) cls = "ok";
+    else if (["MISS", "BYPASS", "EXPIRED"].includes(state)) cls = "miss";
+    ca.className = "recent-cache " + cls;
+    ca.textContent = label;
+
+    const st = document.createElement("span");
+    st.className = "recent-status" + (r.status >= 400 ? " bad" : "");
+    st.textContent = r.status;
+
+    const sz = document.createElement("span");
+    sz.className = "recent-size";
+    sz.textContent = fmtBytes(r.bytes || 0);
+
+    const rt = document.createElement("span");
+    rt.className = "recent-rt";
+    rt.textContent = r.rt == null ? "—" : r.rt.toFixed(2) + "s";
+
+    row.append(t, c, s, p, ca, st, sz, rt);
+    box.appendChild(row);
+  }
+}
+
+async function loadRecent() {
+  // 暂停时不动；页面在后台时也不轮询（省管理端 I/O）
+  if (recentPaused || document.hidden) return;
+  try {
+    const d = await getJSON("/api/recent?limit=30");
+    renderRecent(d.recent || []);
+  } catch (e) {
+    const box = $("recent-list");
+    box.innerHTML = "";
+    box.appendChild(emptyBox("管理端无响应"));
+  }
+}
+
 // ---- 劫持规则 ----
 // 用「域名 → 目标」的映射对呈现，直接体现「劫持」语义。
 function renderRules(data) {
@@ -841,7 +920,7 @@ async function openChangelog() {
   }
 }
 
-const ALL_BOXES = ["cache-list", "hit-list", "rule-list", "cert-list", "server-list"];
+const ALL_BOXES = ["cache-list", "hit-list", "recent-list", "rule-list", "cert-list", "server-list"];
 const ALL_EXTRA_BOXES = ["root-ca"];
 
 function setHealth(ok, text) {
@@ -938,6 +1017,13 @@ function bindEvents() {
     $("rootca-preview").innerHTML = "";
     syncRootCaApply();
   });
+  // 最近调用：暂停/恢复自动刷新
+  // 列表每 3 秒整体重绘，想停下来看清某一行时必须能暂停
+  $("recent-pause").addEventListener("click", () => {
+    recentPaused = !recentPaused;
+    $("recent-pause").textContent = recentPaused ? "继续" : "暂停";
+    if (!recentPaused) loadRecent();
+  });
   // 未命中明细
   $("miss-close").addEventListener("click", () => $("miss-dialog").close());
   // 更新日志
@@ -960,3 +1046,6 @@ function bindEvents() {
 bindEvents();
 load();
 setInterval(load, 30000);
+// 最近调用是「实时」视图，刷新频率与其他区块不同（3s vs 30s）
+loadRecent();
+setInterval(loadRecent, 3000);

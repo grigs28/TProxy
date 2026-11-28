@@ -396,3 +396,26 @@ def test_hitrate_reads_real_log_format(client, tmp_path):
     assert rows["python"]["hit"] == 3
     assert rows["python"]["miss"] == 1
     assert rows["python"]["rate"] == 75.0
+
+
+def test_recent_lists_latest_requests(client, tmp_path):
+    """最近调用：界面「现在在用什么」的数据源。
+
+    ⚠️ 这是「最近完成」—— access log 只在请求结束时写盘。
+    """
+    line = ('127.0.0.1 - [28/Nov/2026:04:42:26 +0000] "GET {} HTTP/1.1" 200 696 '
+            '"-" "curl" cache={} rt=0.123\n')
+    (tmp_path / "logs" / "os-repo-ssl.log").write_text(
+        line.format("/a/repomd.xml", "HIT") +
+        line.format("/b/Packages.gz", "MISS"))
+    d = client.get("/api/recent?limit=10").get_json()
+    rows = d["recent"]
+    assert len(rows) == 2
+    assert rows[0]["service"] == "os"
+    assert rows[0]["rt"] == 0.123
+    assert {r["cache"] for r in rows} == {"HIT", "MISS"}
+
+
+def test_recent_empty_when_no_logs(client):
+    d = client.get("/api/recent").get_json()
+    assert d["recent"] == []

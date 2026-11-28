@@ -208,6 +208,47 @@
   .cache-state.on  { color: var(--ok); }
   .cache-state.off { color: var(--faint); }
 
+  /* ---- 最近调用 ----
+     ⚠️ access log 只在请求**完成**时落盘，所以这里是「最近完成」，
+        不是「正在传输」。界面措辞刻意与事实一致 ——
+        写「正在下载」会让人以为能看到在途进度，那是没有的。
+
+     列宽固定便于竖向扫读；请求列吃掉剩余宽度并省略超出部分，
+     完整路径放在 title 里，悬停可见。 */
+  .recent-head, .recent-row {
+    display: grid;
+    grid-template-columns: 74px 112px 56px minmax(0, 1fr) 56px 44px 64px 56px;
+    gap: 10px;
+    align-items: baseline;
+    padding: 5px 0;
+  }
+  .recent-head {
+    font-size: 12px;
+    letter-spacing: .06em;
+    color: var(--faint);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 1;
+  }
+  .recent-row { border-bottom: 1px solid var(--border); }
+  .recent-row > span {
+    font-family: var(--mono);
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .recent-time, .recent-client { color: var(--muted); }
+  .recent-svc  { color: var(--accent); }
+  .recent-path { color: var(--text); }
+  .recent-status, .recent-size, .recent-rt { text-align: right; color: var(--muted); }
+  .recent-status.bad { color: var(--bad); }
+  .recent-cache.ok   { color: var(--ok); }
+  .recent-cache.miss { color: var(--warn); }
+  .recent-cache.none { color: var(--faint); }
+
   /* ---- 滚动容器 ----
      劫持规则与证书各有 30+ 条，全部铺开会把页面拉得很长。
      限高加滚动条，既能看到条数又不挤占其他区块。
@@ -503,6 +544,19 @@
   <section>
     <h2>缓存命中率 <span class="count" id="hit-count"></span></h2>
     <div id="hit-list"><div class="loading">读取中…</div></div>
+  </section>
+
+  <section>
+    <h2>最近调用 <span class="count" id="recent-count"></span>
+      <button class="btn" id="recent-pause" title="暂停/恢复自动刷新">暂停</button>
+    </h2>
+    <div class="scroll">
+      <div class="recent-head">
+        <span>时间</span><span>来源</span><span>服务</span><span>请求</span>
+        <span>缓存</span><span>状态</span><span>大小</span><span>耗时</span>
+      </div>
+      <div id="recent-list"><div class="loading">读取中…</div></div>
+    </div>
   </section>
 
   <section>

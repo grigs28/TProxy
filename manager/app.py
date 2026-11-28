@@ -18,6 +18,7 @@ from backend.certmgr import DEFAULT_DAYS, preview_sign, sign_cert
 from backend.certs import list_certs, root_ca_info
 from backend.config_read import parse_dnsmasq_rules, parse_nginx_servers
 from backend.hitrate import all_hitrate, miss_breakdown
+from backend.recent import recent_requests
 from backend.confd import add_conf, list_confs, read_conf, write_conf
 from backend.rootca import (CONFIRM_WORD, DEFAULT_ROOT_DAYS, preview_rotate,
                             rotate_root_ca)
@@ -302,6 +303,20 @@ def create_app():
         except ValueError:
             limit = 40
         return jsonify(miss_breakdown(cfg("TPROXY_LOG_DIR"), t, limit=limit))
+
+    @app.route("/api/recent")
+    def recent():
+        """最近**完成**的请求流水。
+
+        ⚠️ 不是「正在传输」—— tengine 的 access log 只在请求完成时写。
+        界面上也按「最近调用」措辞，不夸大成「正在下载」。
+        """
+        try:
+            limit = min(int(request.args.get("limit", 30)), 200)
+        except ValueError:
+            limit = 30
+        return jsonify({"recent": recent_requests(cfg("TPROXY_LOG_DIR"),
+                                                  limit=limit)})
 
     # ---- 新增上游 ----
     # 这两个端点会【写生产配置】，故只走 POST，且依赖 before_request 的登录校验。

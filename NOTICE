@@ -39,6 +39,16 @@ Copyright (c) 2026 grigs28
 变更记录
 --------
 
+### 2026-11-28
+
+**管理界面新增「最近调用」实时流水**（详见 `CHANGELOG.md` 0.5.14）
+
+- `log_format main` 增加 `rt=$request_time`；新增 `backend/recent.py` 与
+  `/api/recent`；前端新 section，3 秒轮询 + 暂停。
+- 措辞用「最近调用」而非「正在下载」—— access log 只在请求完成时写盘。
+- tail 改为 seek 按块读（git.log 已 14MB，3 秒轮询不能整读）；
+  解析兼容没有 `rt=` 的旧行，避免改格式后列表突然空白。
+
 ### 2026-11-25
 
 **包仓库缓存按可变性分层；消除 apt「半新半旧」校验失败**（详见 `CHANGELOG.md` 0.5.13）
