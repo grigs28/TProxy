@@ -41,6 +41,15 @@ Copyright (c) 2026 grigs28
 
 ### 2026-11-28
 
+**安全修复：`?ticket=` 绕过全部 API 鉴权**（详见 `CHANGELOG.md` 0.5.15）
+
+- `before_request` 里 ticket 放行原先按参数判断、对任何路径生效，
+  未登录者加 `?ticket=x` 即可读取 `/api/*`（含新增的请求流水）。
+- 收窄为仅首页 `/` 放行（`index()` 会转调 `callback()` 真正验票）；
+  新增回归测试，带 ticket 访问六个 API 必须 401。
+
+### 2026-11-28
+
 **管理界面新增「最近调用」实时流水**（详见 `CHANGELOG.md` 0.5.14）
 
 - `log_format main` 增加 `rt=$request_time`；新增 `backend/recent.py` 与

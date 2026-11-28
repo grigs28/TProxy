@@ -119,7 +119,14 @@ def create_app():
             return None
         # 带 ticket 的请求必须放行到视图函数 —— 它就是登录回调本身。
         # 若在这里拦掉，/  会直接跳回 SSO，ticket 永远处理不到（死循环）。
-        if request.args.get("ticket"):
+        #
+        # ⚠️ **只能对首页放行，不能写成「任何路径带 ticket 就放行」。**
+        #    `/callback` 已在 PUBLIC_PATHS 里，不需要这条；其余路径根本没有
+        #    处理 ticket 的逻辑。若按参数放行，等于**把所有 API 的鉴权绕过**：
+        #    实测 /api/recent?ticket=x 曾直接返回日志流水（客户端 IP、请求路径），
+        #    /api/status、/api/cache、/api/certs 同样可读。
+        #    首页的 index() 会走 callback() 真正验票，无效票仍会被打回登录页。
+        if path == "/" and request.args.get("ticket"):
             return None
         # API 返回 401 而非重定向：让调用方能明确区分「未登录」与「无权限」
         if path.startswith("/api/"):

@@ -12,6 +12,59 @@
 
 ---
 
+## [0.5.15] - 2026-11-28
+
+### 🔴 安全修复：`?ticket=` 参数可绕过全部 API 鉴权
+
+**问题**（自动化安全审查发现，已实测确认可利用）：
+
+```python
+# before_request
+if request.args.get("ticket"):
+    return None        # ← 对【任何路径】生效
+```
+
+于是任何未登录的人只要在 URL 后加 `?ticket=x` 就能读到全部数据：
+
+```
+/api/recent?ticket=x  → 200（日志流水：客户端 IP、请求路径、私有仓库名）
+/api/status?ticket=x  → 200
+/api/cache?ticket=x   → 200
+/api/certs?ticket=x   → 200
+```
+
+**这是既有缺陷**，但 0.5.14 新增的 `/api/recent` 让它能泄露的信息更多
+（请求流水含客户端标识与路径）。
+
+**根因**：ticket 放行本意是「让登录回跳能被处理」，但写成了按参数而非按路径判断。
+实际只有**首页 `/`** 需要它（`index()` 会转调 `callback()` 真正验票）；
+`/callback` 已在 `PUBLIC_PATHS` 里，其余路径根本没有处理 ticket 的逻辑。
+
+**修法**：
+
+```python
+if path == "/" and request.args.get("ticket"):
+    return None
+```
+
+**验证**（生产实测）：
+
+```
+/api/recent?ticket=x     → 401   （修复前 200）
+/api/status?ticket=x     → 401
+/api/cache?ticket=x      → 401
+/api/certs?ticket=x      → 401
+/api/hitrate?ticket=x    → 401
+/api/recent              → 401
+/?ticket=bogus           → 302 /login   （SSO 流程仍正常，无效票被打回）
+```
+
+**回归测试**：`tests/test_sso.py` 新增两项 ——
+带 ticket 访问六个 API 必须 401；首页 ticket 流程必须仍然可用。
+测试总数 219 → 221。
+
+---
+
 ## [0.5.14] - 2026-11-28
 
 ### 管理界面新增「最近调用」实时流水

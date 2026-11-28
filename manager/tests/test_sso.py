@@ -72,7 +72,7 @@ def test_all_api_endpoints_require_login(client):
     只能靠绑回环来保护。
     """
     for ep in ("/api/status", "/api/cache", "/api/rules",
-               "/api/certs", "/api/hitrate"):
+               "/api/certs", "/api/hitrate", "/api/recent"):
         r = client.get(ep)
         assert r.status_code == 401, f"{ep} 未登录却返回 {r.status_code}"
 
@@ -181,3 +181,26 @@ def test_login_url_uses_configured_app_ref(client, monkeypatch, tmp_path):
     c = app.test_client()
     r = c.get("/")
     assert "from=id:99" in r.headers["Location"]
+
+
+def test_ticket_param_does_not_bypass_api_auth(client):
+    """**安全回归**：带 `?ticket=` 参数不得绕过 API 鉴权。
+
+    曾经的写法是 `if request.args.get("ticket"): return None` —— 对**任何路径**生效。
+    后果：`/api/recent?ticket=x`、`/api/status?ticket=x`、`/api/cache?ticket=x`
+    全部返回 200 与真实数据（实测日志流水里含客户端 IP、请求路径、私有仓库名）。
+    ticket 本该只对「登录回跳入口」有意义 —— 即首页 /（/callback 已在公开路径里）。
+    """
+    for ep in ("/api/status", "/api/cache", "/api/rules", "/api/certs",
+               "/api/hitrate", "/api/recent"):
+        r = client.get(ep + "?ticket=bogus")
+        assert r.status_code == 401, f"{ep} 带 ticket 竟返回 {r.status_code}"
+
+
+def test_ticket_still_works_on_root(client, monkeypatch):
+    """收紧之后，首页的 ticket 流程必须仍然可用（否则 SSO 会死循环）。"""
+    monkeypatch.setattr("backend.sso.requests.get",
+                        _fake_verify({"id": 1, "username": "10015200",
+                                      "display_name": "张三", "is_admin": 1}))
+    r = client.get("/?ticket=ok")
+    assert r.status_code == 302
